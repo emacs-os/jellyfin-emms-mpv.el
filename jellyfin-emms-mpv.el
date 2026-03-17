@@ -1,4 +1,4 @@
-;;; jellyfin-emms-mpv.el --- Jellyfin API client for Emacs EMMS with mpv -*- lexical-binding: t; no-byte-compile: t; -*-
+;;; jellyfin-emms-mpv.el --- Jellyfin API client for Emacs EMMS with mpv -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 2026
 
@@ -43,7 +43,18 @@
 
 (require 'auth-source)
 (require 'json)
+(require 'seq)
 (require 'url)
+
+(declare-function emms-playlist-current-clear "emms-playlist-mode")
+(declare-function emms-add-url "emms")
+(declare-function emms-playlist-track-at "emms")
+(declare-function emms-track-set "emms")
+(declare-function emms-track-get "emms")
+(declare-function emms-playlist-mode-play-current-track "emms-playlist-mode")
+
+(defvar url-http-end-of-headers)
+(defvar emms-playlist-buffer)
 
 (defgroup jellyfin nil
   "Jellyfin media server client."
@@ -151,7 +162,7 @@ Callback just kills the response buffer."
            ("X-Emby-Authorization" . ,(jellyfin--auth-header))))
         (url-request-data (json-encode body)))
     (url-retrieve (concat jellyfin-server-url path)
-                  (lambda (status &rest _)
+                  (lambda (_status &rest _)
                     (when-let ((buf (current-buffer)))
                       (when (buffer-live-p buf)
                         (kill-buffer buf)))))))
