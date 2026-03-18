@@ -36,6 +36,8 @@ If your server uses a custom port (e.g. `http://your-server.example.com:8096`), 
 machine your-server.example.com port 8096 login USERNAME password PASSWORD
 ```
 
+Note: custom port auth-source matching is untested. Please report any issues.
+
 ### With Elpaca
 
 ```elisp
