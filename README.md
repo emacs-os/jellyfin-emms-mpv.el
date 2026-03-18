@@ -7,8 +7,8 @@ Browse and play music/video from a Jellyfin server via EMMS + mpv. Tracks playba
 ## Requirements
 
 - A Jellyfin server
-- EMMS
-- mpv
+- EMMS (for Music/Audio, it will play through whatever you have configured)
+- mpv (for Movies and Shows, mpv is required)
 
 Media is discovered by type (Movie, Shows, Music, etc.) across all libraries on the server - library names and folder structure don't matter.
 
@@ -57,6 +57,18 @@ Note: custom port auth-source matching is untested. Please report any issues.
   :config
   (setq jellyfin-server-url "https://your-server.example.com"))
 ```
+
+---
+
+## How it Works
+
+**Video** (movies, shows, continue-watching): Spawns mpv directly via `start-process`, completely bypassing EMMS. Movies are a single `completing-read` pick; shows add two more steps (series -> season -> episode), then generate an m3u playlist from the chosen episode through the end of the selected season so mpv plays them in sequence. Playback position is tracked via mpv's IPC socket and reported to Jellyfin's session API for "Continue Watching" progress.
+
+Resuming a movie seeks to the saved position. Resuming an episode fetches the remaining episodes in that season and builds a playlist from the resumed episode through the end of the season, seeking to the saved position in the first entry.
+
+**Audio** (albums, playlists): Uses EMMS's normal player system (`emms-add-url`, `emms-playlist-mode-play-current-track`), so it respects `emms-player-list`. If someone has VLC or another player configured instead of mpv, EMMS will use that for audio. No Jellyfin progress reporting is done for audio playback.
+
+The mpv requirement is only for video. Audio works with whatever EMMS player the user already has configured.
 
 ## License
 

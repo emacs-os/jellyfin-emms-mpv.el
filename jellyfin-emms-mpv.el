@@ -26,10 +26,9 @@
 ;; Tracks playback state via mpv IPC and reports to Jellyfin's session API
 ;; so "Continue Watching" stays up to date.
 ;;
-;; Assumptions:
-;;   - Your Jellyfin libraries are named "Movies", "Shows", and "Playlists"
-;;   - EMMS is installed
-;;   - mpv is installed
+;; Requirements:
+;;   - EMMS
+;;   - mpv
 ;;
 ;; Usage:
 ;;   M-x jellyfin-browse-movies             — pick a movie, open mpv
@@ -50,7 +49,6 @@
 (declare-function emms-add-url "emms")
 (declare-function emms-playlist-track-at "emms")
 (declare-function emms-track-set "emms")
-(declare-function emms-track-get "emms")
 (declare-function emms-playlist-mode-play-current-track "emms-playlist-mode")
 
 (defvar url-http-end-of-headers)
@@ -85,9 +83,6 @@
 (defvar jellyfin--mpv-ipc-buf "" "Incomplete IPC data buffer.")
 (defvar jellyfin--mpv-socket nil "Path to mpv IPC socket file.")
 (defvar jellyfin--mpv-play-session-id nil "Random play session ID for Jellyfin reporting.")
-
-(defvar-local jellyfin--episode-item-ids nil
-  "Ordered list of Jellyfin item IDs for the current show season.")
 
 ;;; --- Authentication ---
 
@@ -531,26 +526,9 @@ Cleans up any existing session first."
     (switch-to-buffer emms-playlist-buffer)
     (message "Queued %d tracks from %s" (length tracks) choice)))
 
-(defvar-local jellyfin--episode-urls nil
-  "Ordered list of video stream URLs for the current show season.")
-
-(defun jellyfin--play-episode-from-here ()
-  "Play from current episode through end of season via mpv."
-  (interactive)
-  (let* ((track (emms-playlist-track-at (point)))
-         (idx (and track (emms-track-get track 'jellyfin-episode-index))))
-    (unless (and idx jellyfin--episode-urls)
-      (user-error "No Jellyfin episode at point"))
-    (let ((remaining-urls (nthcdr idx jellyfin--episode-urls))
-          (remaining-ids (nthcdr idx jellyfin--episode-item-ids)))
-      (jellyfin--mpv-play remaining-urls
-                          (apply #'vector remaining-ids))
-      (message "Playing from episode %d through %d"
-               (1+ idx) (length jellyfin--episode-urls)))))
-
 ;;;###autoload
 (defun jellyfin-browse-shows ()
-  "Browse TV shows: Series -> Season -> populate EMMS with episodes."
+  "Browse TV shows: Series -> Season -> Episode, then play in mpv."
   (interactive)
   (jellyfin--ensure-auth)
   (let* (;; Pick series
@@ -572,39 +550,38 @@ Cleans up any existing session first."
          (season-num (alist-get 'IndexNumber season-item))
          ;; Get episodes
          (episodes (jellyfin--get-episodes series-id season-id))
+         (episode-alist
+          (mapcar (lambda (ep)
+                    (cons (format "S%02dE%02d — %s"
+                                  (or season-num 0)
+                                  (or (alist-get 'IndexNumber ep) 0)
+                                  (alist-get 'Name ep))
+                          ep))
+                  episodes))
+         (ep-choice (completing-read "Episode: "
+                                     (lambda (str pred action)
+                                       (if (eq action 'metadata)
+                                           '(metadata (display-sort-function . identity))
+                                         (complete-with-action
+                                          action (mapcar #'car episode-alist)
+                                          str pred)))
+                                     nil t))
+         (chosen-ep (cdr (assoc ep-choice episode-alist)))
+         (chosen-id (alist-get 'Id chosen-ep))
+         ;; Collect this episode + all remaining
+         (found nil)
          (urls nil)
-         (item-ids nil)
-         (idx 0))
-    (require 'emms)
-    (emms-playlist-current-clear)
+         (ep-ids nil))
     (seq-doseq (ep episodes)
-      (let* ((id (alist-get 'Id ep))
-             (url (jellyfin--stream-url id "Videos"))
-             (ep-num (alist-get 'IndexNumber ep))
-             (name (alist-get 'Name ep))
-             (title (format "S%02dE%02d — %s"
-                            (or season-num 0) (or ep-num 0) name)))
-        (push url urls)
-        (push id item-ids)
-        (emms-add-url url)
-        (with-current-buffer emms-playlist-buffer
-          (save-excursion
-            (goto-char (point-max))
-            (forward-line -1)
-            (let ((track (emms-playlist-track-at (point))))
-              (emms-track-set track 'info-title title)
-              (emms-track-set track 'jellyfin-episode-index idx))))
-        (setq idx (1+ idx))))
+      (when (or found (equal (alist-get 'Id ep) chosen-id))
+        (setq found t)
+        (push (jellyfin--stream-url (alist-get 'Id ep) "Videos") urls)
+        (push (alist-get 'Id ep) ep-ids)))
     (setq urls (nreverse urls))
-    (setq item-ids (nreverse item-ids))
-    (with-current-buffer emms-playlist-buffer
-      (setq-local jellyfin--episode-urls urls)
-      (setq-local jellyfin--episode-item-ids item-ids)
-      (local-set-key (kbd "RET") #'jellyfin--play-episode-from-here)
-      (goto-char (point-min)))
-    (switch-to-buffer emms-playlist-buffer)
-    (message "Loaded %d episodes from %s — %s"
-             (length episodes) series-choice season-choice)))
+    (setq ep-ids (nreverse ep-ids))
+    (jellyfin--mpv-play urls (apply #'vector ep-ids))
+    (message "Playing %s — %s + %d more"
+             series-choice ep-choice (1- (length urls)))))
 
 ;;;###autoload
 (defun jellyfin-browse-continue-watching ()
