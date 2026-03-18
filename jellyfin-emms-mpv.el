@@ -396,30 +396,24 @@ Results are cached in `jellyfin--preview-image-cache'."
                 (delete-file tmp-file))))
         (error nil))))
 
-(defun jellyfin--fetch-splash-image ()
-  "Fetch the Jellyfin server splash screen as a fallback image.
-Returns an image descriptor or nil.  Cached under the key `splash'."
-  (or (gethash 'splash jellyfin--preview-image-cache)
-      (condition-case nil
-          (let* ((url-show-status nil)
-                 (img-url (format "%s/Branding/Splashscreen?api_key=%s"
-                                  jellyfin-server-url jellyfin--token))
-                 (tmp-file (make-temp-file "jellyfin-splash-")))
-            (url-copy-file img-url tmp-file t)
-            (unwind-protect
-                (when (and (file-exists-p tmp-file)
-                           (> (file-attribute-size (file-attributes tmp-file)) 0))
-                  (let* ((data (with-temp-buffer
-                                 (set-buffer-multibyte nil)
-                                 (insert-file-contents-literally tmp-file)
-                                 (buffer-string)))
-                         (image (create-image data nil t :width 300)))
-                    (when image
-                      (puthash 'splash image jellyfin--preview-image-cache)
-                      image)))
-              (when (file-exists-p tmp-file)
-                (delete-file tmp-file))))
-        (error nil))))
+(defun jellyfin--music-placeholder-image ()
+  "Return a generated SVG music note image as a fallback placeholder."
+  (or (gethash 'music-placeholder jellyfin--preview-image-cache)
+      (let* ((svg "<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 300 300\">
+  <rect width=\"300\" height=\"300\" rx=\"8\" fill=\"#1c2a3a\"/>
+  <g transform=\"translate(90,80)\" fill=\"#4a6a8a\">
+    <rect x=\"38\" y=\"0\" width=\"6\" height=\"100\"/>
+    <rect x=\"108\" y=\"20\" width=\"6\" height=\"80\"/>
+    <polygon points=\"38,0 114,20 114,28 38,8\"/>
+    <ellipse cx=\"24\" cy=\"100\" rx=\"24\" ry=\"16\" transform=\"rotate(-20,24,100)\"/>
+    <ellipse cx=\"94\" cy=\"100\" rx=\"24\" ry=\"16\" transform=\"rotate(-20,94,100)\"/>
+  </g>
+</svg>")
+             (image (create-image svg 'svg t :width 300)))
+        (when image
+          (puthash 'music-placeholder image jellyfin--preview-image-cache))
+        image)))
 
 ;;; --- Playback reporting ---
 
@@ -853,7 +847,7 @@ Requires `jellyfin-preview' and GUI Emacs."
   (when (and jellyfin-preview (display-graphic-p))
     (let ((image (or (and item-id (jellyfin--fetch-image item-id))
                      (and fallback-id (jellyfin--fetch-image fallback-id))
-                     (jellyfin--fetch-splash-image))))
+                     (jellyfin--music-placeholder-image))))
       (with-current-buffer emms-playlist-buffer
         (let ((inhibit-read-only t))
           ;; Always remove existing cover region

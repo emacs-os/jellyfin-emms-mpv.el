@@ -53,7 +53,8 @@ Note: custom port auth-source matching is untested. Please report any issues.
   :defer t
   :ensure (:host github :repo "emacs-os/jellyfin-emms-mpv.el")
   :config
-  (setq jellyfin-server-url "https://your-server.example.com"))
+  (setq jellyfin-server-url "https://your-server.example.com"
+        jellyfin-preview t))
 ```
 
 ### With straight.el
@@ -63,7 +64,8 @@ Note: custom port auth-source matching is untested. Please report any issues.
   :defer t
   :straight (:host github :repo "emacs-os/jellyfin-emms-mpv.el")
   :config
-  (setq jellyfin-server-url "https://your-server.example.com"))
+  (setq jellyfin-server-url "https://your-server.example.com"
+        jellyfin-preview t))
 ```
 
 ## Configuration
