@@ -86,13 +86,26 @@ sudo dnf install mpv
 brew install mpv
 ```
 
-### EMMS configuration
+### EMMS configuration (required for music)
 
 The following is the Elpaca EMMS configuration used personally during development and testing. It is not required to be this way, but is here for informational purposes:
 
 ```elisp
 (use-package emms
   :ensure t
+  :defer t
+  :config
+  (require 'emms-setup)
+  (emms-all)
+  (setq emms-player-list '(emms-player-mpv))
+  (setq emms-player-mpv-parameters '("--no-video")))
+```
+
+Or with straight.el:
+
+```elisp
+(use-package emms
+  :straight t
   :defer t
   :config
   (require 'emms-setup)
