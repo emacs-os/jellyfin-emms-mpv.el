@@ -1,9 +1,5 @@
 # jellyfin-emms-mpv.el
 
-<p align="center">
-  <img src="logo.png" alt="jellyfin-emms-mpv.el" width="256">
-</p>
-
 Browse and play music/video from a Jellyfin server via EMMS + mpv. Tracks playback position and reports to Jellyfin so "Continue Watching" stays in sync.
 
 ##### Music streaming via EMMS, with experimental elcava visualizer
