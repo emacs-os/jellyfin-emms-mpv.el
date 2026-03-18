@@ -76,7 +76,8 @@ Note: custom port auth-source matching is untested. Please report any issues.
   :ensure (:host github :repo "emacs-os/jellyfin-emms-mpv.el")
   :config
   (setq jellyfin-server-url "https://your-server.example.com"
-        jellyfin-preview t))
+        jellyfin-preview t
+        jellyfin-preferred-language "eng"))
 ```
 
 ### With straight.el
@@ -87,7 +88,8 @@ Note: custom port auth-source matching is untested. Please report any issues.
   :straight (:host github :repo "emacs-os/jellyfin-emms-mpv.el")
   :config
   (setq jellyfin-server-url "https://your-server.example.com"
-        jellyfin-preview t))
+        jellyfin-preview t
+        jellyfin-preferred-language "eng"))
 ```
 
 ### mpv (required for movies/shows)
@@ -138,10 +140,13 @@ Or with straight.el:
 
 ## Configuration
 
-| Variable                  | Default | Description                                                      |
-|---------------------------|---------|------------------------------------------------------------------|
-| `jellyfin-server-url`     | `nil`   | Base URL of your Jellyfin server                                 |
-| `jellyfin-preview`        | `nil`   | Show a preview buffer with posters and descriptions when browsing, requires graphical Emacs, fancier, but slower |
+| Variable                       | Default | Description                                                      |
+|--------------------------------|---------|------------------------------------------------------------------|
+| `jellyfin-server-url`          | `nil`   | Base URL of your Jellyfin server                                 |
+| `jellyfin-preview`             | `nil`   | Show a preview buffer with posters and descriptions when browsing, requires graphical Emacs, fancier, but slower |
+| `jellyfin-preferred-language`  | `nil`   | Preferred audio language for video playback (ISO 639-2, e.g. `"eng"`, `"jpn"`). See below. |
+
+Most media files have a single audio track so language selection never comes up. For files with multiple audio tracks (e.g. foreign films with both original and dubbed audio, or anime with Japanese and English tracks), the player uses the container's default track which may not be the language you want. Setting `jellyfin-preferred-language` to a three-letter ISO 639-2 code (e.g. `"eng"`, `"jpn"`, `"fre"`) passes `--alang` to mpv, which selects the matching audio track without breaking direct play. Falls back to the container default if no match is found.
 
 When `jellyfin-preview` is enabled:
 
