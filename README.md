@@ -4,11 +4,12 @@ Jellyfin API client for Emacs EMMS with mpv.
 
 Browse and play music/video from a Jellyfin server via EMMS + mpv. Tracks playback state via mpv IPC and reports to Jellyfin's session API so "Continue Watching" stays up to date.
 
-## Assumptions
+## Requirements
 
-- Your Jellyfin libraries are named "Movies", "Shows", "Music", and "Playlists"
-- EMMS is installed
-- mpv is installed
+- EMMS
+- mpv
+
+Media is discovered by type (Movie, Shows, Music, etc.) across all libraries on the server — library names and folder structure don't matter.
 
 ## Usage
 
