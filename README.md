@@ -20,21 +20,21 @@ Media is discovered by type (Movie, Shows, Music, etc.) across all libraries on 
 
 | Command                                  | Description                                          |
 |------------------------------------------|------------------------------------------------------|
-| `M-x jellyfin-browse-movies`            | Pick a movie, open mpv                               |
-| `M-x jellyfin-browse-movies-gallery`   | Visual movie browser with poster grid (GUI only)     |
-| `M-x jellyfin-browse-shows`             | Series -> season -> pick episode, mpv plays through to end of season  |
-| `M-x jellyfin-browse-shows-gallery`    | Visual show browser with poster grid (GUI only)                      |
-| `M-x jellyfin-browse-continue-watching` | Resume a movie or show where you left off            |
+| `M-x jellyfin-browse-movies`            | Pick a movie, open mpv. Minibuffer completion; with `jellyfin-preview` shows poster previews that narrow as you type |
+| `M-x jellyfin-browse-movies-gallery`   | Poster grid of all movies (GUI only). No minibuffer; navigate and search like a normal text buffer. Click or RET to play. Images are cached to disk |
+| `M-x jellyfin-browse-shows`             | Series -> season -> pick episode, mpv plays through to end of season. Minibuffer completion; with `jellyfin-preview` shows poster previews that narrow as you type |
+| `M-x jellyfin-browse-shows-gallery`    | Poster grid of all shows (GUI only). Drill down through series -> season -> episode without the minibuffer, dired-inspired. Click or RET to play. Images are cached to disk |
+| `M-x jellyfin-browse-continue-watching` | Resume a movie or show where you left off. Minibuffer completion; with `jellyfin-preview` shows poster previews that narrow as you type |
 | `M-x jellyfin-browse-albums`            | Artist -> album -> queue tracks in EMMS              |
 | `M-x jellyfin-browse-playlists`         | Pick playlist -> queue tracks in EMMS                |
 | `M-x jellyfin-browse-songs`            | Dired-like song picker, mark with m, unmark with u, queue tracks in EMMS with RET |
-| `M-x jellyfin-browse-songs-refetch-metadata` | Re-fetch song list from server and update cache |
-| `M-x jellyfin-browse-movies-gallery-refetch-metadata` | Re-fetch movie list and posters from server |
-| `M-x jellyfin-browse-shows-gallery-refetch-metadata` | Re-fetch show list and posters from server |
+| `M-x jellyfin-browse-songs-refetch-metadata` | Bust the local song cache and re-fetch from the server. The cache powers the `jellyfin-browse-songs` picker |
+| `M-x jellyfin-browse-movies-gallery-refetch-metadata` | Bust the local movie/poster cache. Run `jellyfin-browse-movies-gallery` after to re-fetch |
+| `M-x jellyfin-browse-shows-gallery-refetch-metadata` | Bust the local show/poster cache. Run `jellyfin-browse-shows-gallery` after to re-fetch |
 
 ### Metadata and image caching
 
-`jellyfin-browse-songs`, `jellyfin-browse-movies-gallery`, and `jellyfin-browse-shows-gallery` cache their metadata to disk (in `user-emacs-directory`) so only the first invocation hits the server. After that they open instantly.
+`jellyfin-browse-songs`, `jellyfin-browse-movies-gallery`, and `jellyfin-browse-shows-gallery` are the slowest operations (fetching every item and its images from the server), so they cache their metadata to disk (in `user-emacs-directory`). Only the first invocation hits the server; after that they open instantly.
 
 | Cache file                            | Command                              |
 |---------------------------------------|--------------------------------------|
