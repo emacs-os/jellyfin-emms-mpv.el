@@ -40,13 +40,26 @@
 ;;   M-x jellyfin-browse-songs              — dired-like song picker (cached; instant after first load)
 ;;   M-x jellyfin-browse-songs-refetch-metadata — re-fetch after adding/removing songs on server
 ;;
-;; EMMS integration:
+;; mpv integration (video):
+;;   Movies and shows spawn mpv directly via `start-process', bypassing EMMS
+;;   entirely.  An IPC connection over a Unix socket observes playlist-pos and
+;;   pause state in real time.  A 30-second timer polls playback position and
+;;   reports progress to Jellyfin's session API (/Sessions/Playing/Progress),
+;;   keeping "Continue Watching" accurate.  On mpv exit, a process sentinel
+;;   reports the final position (/Sessions/Playing/Stopped).  Shows generate an
+;;   m3u playlist from the chosen episode through the end of the season so mpv
+;;   plays them in sequence; episode transitions are tracked via playlist-pos
+;;   changes over IPC.
+;;
+;; EMMS integration (audio):
 ;;   Audio commands integrate via EMMS's native extension points:
 ;;   - `emms-info-jellyfin' is an info method (registered in `emms-info-functions')
 ;;     that resolves Jellyfin stream URLs to standard EMMS metadata (info-title,
 ;;     info-artist, info-album, info-tracknumber).
 ;;   - An in-memory item cache (`jellyfin--item-cache') backs metadata lookups so
 ;;     the info method resolves instantly with no extra API calls.
+;;   - Playback uses whatever player the user has in `emms-player-list' (mpv,
+;;     VLC, etc.); the mpv requirement is only for video.
 ;;
 
 ;;; Code:

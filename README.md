@@ -120,6 +120,17 @@ Because metadata flows through EMMS's own info pipeline, track information is av
 
 **Playback**: Uses EMMS's normal player system (`emms-player-list`), so it respects whatever player the user has configured (mpv, VLC, etc.). No Jellyfin progress reporting is done for audio.
 
+## Why video bypasses EMMS
+
+Movies and shows spawn mpv directly instead of going through EMMS. This is deliberate -EMMS's player model doesn't support what video playback needs:
+
+- **Progress reporting**: An IPC connection over a Unix socket tracks playback position in real time and reports it to Jellyfin's session API every 30 seconds, keeping "Continue Watching" accurate. EMMS has no equivalent -it hands a URL to a player and forgets about it.
+- **Resume**: When you resume a movie or episode, mpv seeks to the saved position on launch. EMMS doesn't track or restore playback position.
+- **Seamless episode transitions**: Shows generate an m3u playlist so mpv plays episodes in sequence with its own native playlist handling. If EMMS managed the playlist instead, every episode transition would kill one mpv instance and spawn another, losing seamless playback.
+- **Pause/state tracking**: mpv's pause state is observed over IPC so the correct status is reported to Jellyfin. EMMS doesn't expose player state this way.
+
+Audio has none of these requirements (no progress reporting, no resume, no multi-episode playlists), so it uses EMMS normally and benefits from EMMS's playlist management, metadata display, and player abstraction.
+
 ## License
 
 MIT
