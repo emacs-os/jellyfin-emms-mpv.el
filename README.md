@@ -29,14 +29,14 @@ Browse and play music/video from a Jellyfin server via EMMS + mpv. Tracks playba
 
 | Command | Description |
 |---------|-------------|
-| `M-x jellyfin-browse-movies` | Pick a movie, play in mpv |
+| `M-x jellyfin-browse-movies` | Pick a movie by typing in minibuffer, play in mpv |
 | `M-x jellyfin-browse-movies-gallery` | Poster grid (GUI only), click or RET to play |
-| `M-x jellyfin-browse-shows` | Series -> season -> episode, plays through end of season |
+| `M-x jellyfin-browse-shows` | Series -> season -> episode by typing in minibuffer, plays through end of season |
 | `M-x jellyfin-browse-shows-gallery` | Poster grid drill-down (GUI only), dired-style |
-| `M-x jellyfin-browse-continue-watching` | Resume where you left off |
-| `M-x jellyfin-browse-albums` | Artist -> album -> queue in EMMS |
-| `M-x jellyfin-browse-playlists` | Pick playlist -> queue in EMMS |
-| `M-x jellyfin-browse-songs` | Dired-like song picker: `m` mark, `u` unmark, RET queue |
+| `M-x jellyfin-browse-continue-watching` | Resume where you left off by typing in minibuffer |
+| `M-x jellyfin-browse-albums` | Artist -> album by typing in minibuffer, queue in EMMS |
+| `M-x jellyfin-browse-playlists` | Pick playlist by typing in minibuffer, queue in EMMS |
+| `M-x jellyfin-browse-songs` | Interactive dired-like buffer: `m` mark, `u` unmark, RET queue |
 
 With `jellyfin-preview` enabled, minibuffer commands show poster previews as you type. Gallery commands cache metadata and images to disk on first run - use the corresponding `*-refetch-metadata` command after changing media on the server.
 
@@ -96,11 +96,8 @@ sudo pacman -S mpv
 # Debian / Ubuntu
 sudo apt-get install mpv
 
-# Fedora
+# Fedora / RHEL
 sudo dnf install mpv
-
-# macOS
-brew install mpv
 ```
 
 ### EMMS
@@ -158,8 +155,7 @@ Example config used during development:
 
 **Video** bypasses EMMS and spawns mpv directly. Playback position is tracked over mpv's IPC socket and reported to Jellyfin every 30s. Shows generate an m3u playlist from the chosen episode through end of season. Resume seeks to the saved position.
 
-**Audio** uses EMMS normally. Track metadata (title, artist, album, track number) is set via `emms-info-functions` so it works with the playlist display, modeline, etc. Metadata is cached in memory and on disk.
-
+**Audio** uses EMMS normally. Track metadata (title, artist, album, track number) is set via `emms-info-functions` so it works with the playlist display, modeline, etc.
 ## License
 
 MIT
