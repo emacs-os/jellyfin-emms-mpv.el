@@ -95,6 +95,8 @@ Resuming a movie seeks to the saved position. Resuming an episode fetches the re
 
 **Audio** (albums, playlists): Uses EMMS's normal player system (`emms-add-url`, `emms-playlist-mode-play-current-track`), so it respects `emms-player-list`. If someone has VLC or another player configured instead of mpv, EMMS will use that for audio. No Jellyfin progress reporting is done for audio playback.
 
+The jellyfin Music library commands use emms-add-url + emms-track-set to manually decorate tracks in EMMS after adding them.
+
 The mpv requirement is only for video. Audio works with whatever EMMS player the user already has configured.
 
 ## License
