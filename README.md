@@ -23,8 +23,8 @@ Media is discovered by type (Movie, Shows, Music, etc.) across all libraries on 
 | `M-x jellyfin-browse-movies`            | Pick a movie, open mpv. Minibuffer completion; with `jellyfin-preview` shows poster previews that narrow as you type |
 | `M-x jellyfin-browse-movies-gallery`   | Poster grid of all movies (GUI only). No minibuffer; navigate and search like a normal text buffer. Click or RET to play. Images are cached to disk |
 | `M-x jellyfin-browse-shows`             | Series -> season -> pick episode, mpv plays through to end of season. Minibuffer completion; with `jellyfin-preview` shows poster previews that narrow as you type |
-| `M-x jellyfin-browse-shows-gallery`    | Poster grid of all shows (GUI only). Drill down through series -> season -> episode without the minibuffer, dired-inspired. Click or RET to play. Images are cached to disk |
-| `M-x jellyfin-browse-continue-watching` | Resume a movie or show where you left off. Minibuffer completion; with `jellyfin-preview` shows poster previews that narrow as you type |
+| `M-x jellyfin-browse-shows-gallery`    | Poster grid of all shows (GUI only). Drill down through series -> season -> episode without the minibuffer, dired-inspired. Click or RET to play; mpv plays through to end of season. Images are cached to disk |
+| `M-x jellyfin-browse-continue-watching` | Resume a movie or show where you left off. For shows, mpv plays through to end of season. Minibuffer completion; with `jellyfin-preview` shows poster previews that narrow as you type |
 | `M-x jellyfin-browse-albums`            | Artist -> album -> queue tracks in EMMS              |
 | `M-x jellyfin-browse-playlists`         | Pick playlist -> queue tracks in EMMS                |
 | `M-x jellyfin-browse-songs`            | Dired-like song picker, mark with m, unmark with u, queue tracks in EMMS with RET |
