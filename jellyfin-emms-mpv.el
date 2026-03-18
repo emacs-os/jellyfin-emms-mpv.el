@@ -1161,7 +1161,8 @@ Also clears cached poster images for movies so they are re-fetched."
                 nil))
   (jellyfin--movies-gallery-cache-save)
   (jellyfin--item-cache-populate jellyfin--movies-gallery-cache)
-  (message "Cached %d movies." (length jellyfin--movies-gallery-cache)))
+  (message "Cached %d movies." (length jellyfin--movies-gallery-cache))
+  (jellyfin-browse-movies-gallery))
 
 ;;;###autoload
 (defun jellyfin-browse-albums ()
@@ -1409,7 +1410,8 @@ Also clears cached poster images for shows so they are re-fetched."
                 nil))
   (jellyfin--shows-gallery-cache-save)
   (jellyfin--item-cache-populate jellyfin--shows-gallery-cache)
-  (message "Cached %d shows." (length jellyfin--shows-gallery-cache)))
+  (message "Cached %d shows." (length jellyfin--shows-gallery-cache))
+  (jellyfin-browse-shows-gallery))
 
 ;;;###autoload
 (defun jellyfin-browse-continue-watching ()

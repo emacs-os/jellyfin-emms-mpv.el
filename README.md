@@ -29,8 +29,8 @@ Media is discovered by type (Movie, Shows, Music, etc.) across all libraries on 
 | `M-x jellyfin-browse-playlists`         | Pick playlist -> queue tracks in EMMS                |
 | `M-x jellyfin-browse-songs`            | Dired-like song picker, mark with m, unmark with u, queue tracks in EMMS with RET |
 | `M-x jellyfin-browse-songs-refetch-metadata` | Bust the local song cache and re-fetch from the server. The cache powers the `jellyfin-browse-songs` picker |
-| `M-x jellyfin-browse-movies-gallery-refetch-metadata` | Bust the local movie/poster cache. Run `jellyfin-browse-movies-gallery` after to re-fetch |
-| `M-x jellyfin-browse-shows-gallery-refetch-metadata` | Bust the local show/poster cache. Run `jellyfin-browse-shows-gallery` after to re-fetch |
+| `M-x jellyfin-browse-movies-gallery-refetch-metadata` | Bust the local movie/poster cache and re-fetch from the server |
+| `M-x jellyfin-browse-shows-gallery-refetch-metadata` | Bust the local show/poster cache and re-fetch from the server |
 
 ### Metadata and image caching
 
