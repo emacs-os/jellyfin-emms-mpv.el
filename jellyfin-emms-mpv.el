@@ -323,13 +323,29 @@ This is a suitable element for `emms-info-functions'."
 (defun jellyfin--add-jellyfin-tracks (items)
   "Add Jellyfin audio ITEMS to the EMMS playlist.
 ITEMS is a sequence of Jellyfin item alists.  Each item is cached
-so `emms-info-jellyfin' can resolve metadata without API calls."
+so `emms-info-jellyfin' can resolve metadata without API calls.
+Cover-art properties are set synchronously on each track so they
+are available immediately when `emms-player-started-hook' fires,
+regardless of whether `emms-info-asynchronously' is non-nil."
   (require 'emms)
   (jellyfin--item-cache-populate items)
   (seq-doseq (item items)
     (let* ((id (alist-get 'Id item))
-           (url (jellyfin--stream-url id "Audio")))
-      (emms-add-url url))))
+           (url (jellyfin--stream-url id "Audio"))
+           (artists (alist-get 'AlbumArtists item))
+           (artist-id (and (> (length artists) 0)
+                           (alist-get 'Id (aref artists 0)))))
+      (emms-add-url url)
+      ;; Set cover-art properties synchronously so the track-started
+      ;; hook can find them even before the async info method runs.
+      (with-current-buffer emms-playlist-buffer
+        (save-excursion
+          (goto-char (point-max))
+          (forward-line -1)
+          (when-let ((emms-track (emms-playlist-track-at (point))))
+            (emms-track-set emms-track 'jellyfin-cover-id
+                            (or (alist-get 'AlbumId item) id))
+            (emms-track-set emms-track 'jellyfin-artist-id artist-id)))))))
 
 ;;; --- Fetching shows/seasons/episodes ---
 
