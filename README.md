@@ -63,7 +63,7 @@ Note: custom port auth-source matching is untested. Please report any issues.
 | Variable                  | Default | Description                                                      |
 |---------------------------|---------|------------------------------------------------------------------|
 | `jellyfin-server-url`     | `nil`   | Base URL of your Jellyfin server                                 |
-| `jellyfin-preview`        | `nil`   | Show a preview buffer with posters and descriptions when browsing |
+| `jellyfin-preview`        | `nil`   | Show a preview buffer with posters and descriptions when browsing, requires graphical Emacs, fancier, but slower |
 
 When `jellyfin-preview` is enabled:
 
