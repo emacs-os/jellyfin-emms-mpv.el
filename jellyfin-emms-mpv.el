@@ -33,12 +33,16 @@
 ;; Usage:
 ;;   (setq jellyfin-preview t)               — enable poster/description preview
 ;;   M-x jellyfin-browse-movies             — pick a movie, open mpv
+;;   M-x jellyfin-browse-movies-gallery     — visual movie browser with poster grid (GUI only)
 ;;   M-x jellyfin-browse-shows              — series -> season -> pick episode, mpv plays through
+;;   M-x jellyfin-browse-shows-gallery      — visual show browser with poster grid (GUI only)
 ;;   M-x jellyfin-browse-continue-watching  — resume a movie or show where you left off
 ;;   M-x jellyfin-browse-albums             — artist -> album -> queue tracks in EMMS
 ;;   M-x jellyfin-browse-playlists          — pick playlist -> queue tracks in EMMS
 ;;   M-x jellyfin-browse-songs              — dired-like song picker (cached; instant after first load)
 ;;   M-x jellyfin-browse-songs-refetch-metadata — re-fetch after adding/removing songs on server
+;;   M-x jellyfin-browse-movies-gallery-refetch-metadata — re-fetch movie list and posters
+;;   M-x jellyfin-browse-shows-gallery-refetch-metadata  — re-fetch show list and posters
 ;;
 ;; mpv integration (video):
 ;;   Movies and shows spawn mpv directly via `start-process', bypassing EMMS
@@ -147,6 +151,7 @@ while browsing movies and shows."
          (secret (plist-get found :secret))
          (password (if (functionp secret) (funcall secret) secret))
          (url-show-status nil)
+         (url-request-noninteractive t)
          (url-request-method "POST")
          (url-request-extra-headers
           `(("Content-Type" . "application/json")
@@ -177,6 +182,7 @@ Returns parsed JSON."
                                 params "&"))
                   ""))
          (url-show-status nil)
+         (url-request-noninteractive t)
          (url-request-method "GET")
          (url-request-extra-headers
           `(("X-Emby-Authorization" . ,(jellyfin--auth-header))))
@@ -189,8 +195,10 @@ Returns parsed JSON."
 
 (defun jellyfin--api-post-async (path body)
   "Fire-and-forget async POST to PATH with BODY alist.
-Callback just kills the response buffer."
+Callback kills the response buffer and clears the token on 401."
+  (jellyfin--ensure-auth)
   (let ((url-show-status nil)
+        (url-request-noninteractive t)
         (url-request-method "POST")
         (url-request-extra-headers
          `(("Content-Type" . "application/json")
@@ -198,6 +206,9 @@ Callback just kills the response buffer."
         (url-request-data (json-encode body)))
     (url-retrieve (concat jellyfin-server-url path)
                   (lambda (_status &rest _)
+                    (when (and (boundp 'url-http-response-status)
+                               (eql url-http-response-status 401))
+                      (setq jellyfin--token nil))
                     (when-let ((buf (current-buffer)))
                       (when (buffer-live-p buf)
                         (kill-buffer buf)))))))
@@ -387,30 +398,59 @@ regardless of whether `emms-info-asynchronously' is non-nil."
 (defvar jellyfin--preview-image-cache (make-hash-table :test 'equal)
   "Cache of item-id -> image data, persists across calls.")
 
+(defun jellyfin--image-cache-dir ()
+  "Return the path to the image cache directory, creating it if needed."
+  (let ((dir (expand-file-name "jellyfin-image-cache/" user-emacs-directory)))
+    (unless (file-directory-p dir)
+      (make-directory dir t))
+    dir))
+
 (defun jellyfin--fetch-image (item-id)
   "Fetch poster image for ITEM-ID, returning an image descriptor or nil.
-Results are cached in `jellyfin--preview-image-cache'."
+Results are cached in memory (`jellyfin--preview-image-cache') and
+on disk (`jellyfin-image-cache/' in `user-emacs-directory')."
   (or (gethash item-id jellyfin--preview-image-cache)
-      (condition-case nil
-          (let* ((url-show-status nil)
-                 (img-url (format "%s/Items/%s/Images/Primary?maxWidth=300&api_key=%s"
-                                  jellyfin-server-url item-id jellyfin--token))
-                 (tmp-file (make-temp-file "jellyfin-poster-")))
-            (url-copy-file img-url tmp-file t)
-            (unwind-protect
-                (when (and (file-exists-p tmp-file)
-                           (> (file-attribute-size (file-attributes tmp-file)) 0))
-                  (let* ((data (with-temp-buffer
-                                 (set-buffer-multibyte nil)
-                                 (insert-file-contents-literally tmp-file)
-                                 (buffer-string)))
-                         (image (create-image data nil t :width 300)))
-                    (when image
-                      (puthash item-id image jellyfin--preview-image-cache)
-                      image)))
-              (when (file-exists-p tmp-file)
-                (delete-file tmp-file))))
-        (error nil))))
+      (let ((disk-file (expand-file-name (format "%s" item-id)
+                                         (jellyfin--image-cache-dir))))
+        (if (and (file-exists-p disk-file)
+                 (> (file-attribute-size (file-attributes disk-file)) 0))
+            ;; Load from disk cache
+            (condition-case nil
+                (let* ((data (with-temp-buffer
+                               (set-buffer-multibyte nil)
+                               (insert-file-contents-literally disk-file)
+                               (buffer-string)))
+                       (image (create-image data nil t :width 300)))
+                  (when image
+                    (puthash item-id image jellyfin--preview-image-cache)
+                    image))
+              (error nil))
+          ;; Fetch from API and save to disk
+          (condition-case nil
+              (let* ((url-show-status nil)
+                     (url-request-noninteractive t)
+                     (_auth (jellyfin--ensure-auth))
+                     (img-url (format "%s/Items/%s/Images/Primary?maxWidth=300&api_key=%s"
+                                      jellyfin-server-url item-id jellyfin--token))
+                     (tmp-file (make-temp-file "jellyfin-poster-")))
+                (let ((inhibit-message t))
+                  (url-copy-file img-url tmp-file t))
+                (unwind-protect
+                    (when (and (file-exists-p tmp-file)
+                               (> (file-attribute-size (file-attributes tmp-file)) 0))
+                      (let ((inhibit-message t))
+                        (copy-file tmp-file disk-file t))
+                      (let* ((data (with-temp-buffer
+                                     (set-buffer-multibyte nil)
+                                     (insert-file-contents-literally tmp-file)
+                                     (buffer-string)))
+                             (image (create-image data nil t :width 300)))
+                        (when image
+                          (puthash item-id image jellyfin--preview-image-cache)
+                          image)))
+                  (when (file-exists-p tmp-file)
+                    (delete-file tmp-file))))
+            (error nil))))))
 
 (defun jellyfin--music-placeholder-image ()
   "Return a generated SVG music note image as a fallback placeholder."
@@ -762,6 +802,7 @@ Uses `completion-all-completions' to respect the user's completion styles."
       (when (not (one-window-p t (window-frame win)))
         (delete-window win)))
     (kill-buffer buf))
+  (remove-hook 'window-size-change-functions #'jellyfin--grid-resize-handler)
   (setq jellyfin--preview-data nil))
 
 ;;; --- Show preview drill-down ---
@@ -806,6 +847,84 @@ HEADER, if non-nil, is a function called to insert header content at top."
             (insert "\n"))))
       (goto-char (point-min)))
     (switch-to-buffer buf)))
+
+(defun jellyfin--image-rescale (image width)
+  "Return a copy of IMAGE displayed at WIDTH pixels.
+Returns nil if IMAGE is nil."
+  (when image
+    (cons 'image (plist-put (copy-sequence (cdr image)) :width width))))
+
+(defvar-local jellyfin--grid-state nil
+  "Buffer-local state for re-rendering the grid on window resize.
+A plist (:items ITEMS :make-action FN :make-label FN) or nil.")
+
+(defun jellyfin--grid-resize-handler (_frame)
+  "Re-render the grid when the window showing *Jellyfin* is resized."
+  (when-let ((buf (get-buffer "*Jellyfin*")))
+    (when (buffer-local-value 'jellyfin--grid-state buf)
+      (when-let ((win (get-buffer-window buf t)))
+        (with-selected-window win
+          (let ((state (buffer-local-value 'jellyfin--grid-state buf)))
+            (jellyfin--show-dired-render-grid
+             (plist-get state :items)
+             (plist-get state :make-action)
+             (plist-get state :make-label))))))))
+
+(defun jellyfin--show-dired-render-grid (items make-action make-label)
+  "Render ITEMS as a responsive grid of posters and titles in *Jellyfin*.
+Column count adapts to window width; images stay 200px with even spacing.
+Re-renders automatically when the window is resized."
+  (let* ((buf (get-buffer-create "*Jellyfin*"))
+         (img-w 200)
+         (min-gap 20))
+    (switch-to-buffer buf)
+    (with-current-buffer buf
+      (setq jellyfin--grid-state
+            (list :items items :make-action make-action :make-label make-label))
+      (add-hook 'window-size-change-functions #'jellyfin--grid-resize-handler))
+    (let* ((win-w (window-body-width nil t))
+           (cols (max 1 (/ win-w (+ img-w min-gap))))
+           (col-w (/ win-w cols))
+           (groups (seq-partition items cols))
+           (inhibit-read-only t))
+      (erase-buffer)
+      (jellyfin--preview-mode)
+      (dolist (group groups)
+        ;; Image row
+        (let ((idx 0))
+          (dolist (item group)
+            (let* ((id (alist-get 'Id item))
+                   (action (funcall make-action item))
+                   (image (jellyfin--image-rescale
+                           (jellyfin--fetch-image id) img-w)))
+              (when (> idx 0)
+                (insert (propertize " " 'display
+                                    `(space :align-to (,(* idx col-w))))))
+              (if image
+                  (insert-text-button "[poster]"
+                                      'display image
+                                      'action action
+                                      'follow-link t)
+                (insert-text-button "[no image]"
+                                    'action action
+                                    'follow-link t)))
+            (setq idx (1+ idx))))
+        (insert "\n")
+        ;; Title row
+        (let ((idx 0))
+          (dolist (item group)
+            (let* ((action (funcall make-action item))
+                   (label (funcall make-label item)))
+              (when (> idx 0)
+                (insert (propertize " " 'display
+                                    `(space :align-to (,(* idx col-w))))))
+              (insert-text-button label
+                                  'action action
+                                  'follow-link t
+                                  'face 'bold))
+            (setq idx (1+ idx))))
+        (insert "\n\n"))
+      (goto-char (point-min)))))
 
 (defun jellyfin--show-preview-series (series-alist)
   "Render SERIES-ALIST in the *Jellyfin* buffer.
@@ -958,6 +1077,78 @@ Shows a preview buffer with posters and descriptions as you type."
         (jellyfin--mpv-play (list url) (vector id))
         (message "Playing movie: %s" choice)))))
 
+(defvar jellyfin--movies-gallery-cache nil
+  "Cached list of movie items from the Jellyfin server.")
+
+(defun jellyfin--movies-gallery-cache-file ()
+  "Return the path to the movies gallery cache file."
+  (expand-file-name "jellyfin-movies-gallery-cache.el" user-emacs-directory))
+
+(defun jellyfin--movies-gallery-cache-save ()
+  "Write `jellyfin--movies-gallery-cache' to disk."
+  (when jellyfin--movies-gallery-cache
+    (with-temp-file (jellyfin--movies-gallery-cache-file)
+      (prin1 jellyfin--movies-gallery-cache (current-buffer)))))
+
+(defun jellyfin--movies-gallery-cache-load ()
+  "Load `jellyfin--movies-gallery-cache' from disk if the file exists."
+  (let ((file (jellyfin--movies-gallery-cache-file)))
+    (when (file-exists-p file)
+      (with-temp-buffer
+        (insert-file-contents file)
+        (setq jellyfin--movies-gallery-cache (read (current-buffer))))
+      (jellyfin--item-cache-populate jellyfin--movies-gallery-cache))))
+
+;;;###autoload
+(defun jellyfin-browse-movies-gallery ()
+  "Browse movies as a responsive poster grid in a *Jellyfin* buffer.
+Clicking a poster plays that movie in mpv.  Requires graphical Emacs.
+Uses cached metadata when available; run
+`jellyfin-browse-movies-gallery-refetch-metadata' to refresh."
+  (interactive)
+  (unless (display-graphic-p)
+    (user-error "jellyfin-browse-movies-gallery requires graphical Emacs"))
+  (unless jellyfin--movies-gallery-cache
+    (jellyfin--movies-gallery-cache-load))
+  (unless jellyfin--movies-gallery-cache
+    (jellyfin-browse-movies-gallery-refetch-metadata))
+  (if (zerop (length jellyfin--movies-gallery-cache))
+      (message "No movies found on server.")
+    (jellyfin--show-dired-render-grid
+     (append jellyfin--movies-gallery-cache nil)
+     (lambda (item)
+       (lambda (_btn)
+         (let* ((id (alist-get 'Id item))
+                (url (jellyfin--stream-url id "Videos")))
+           (jellyfin--preview-cleanup)
+           (jellyfin--mpv-play (list url) (vector id))
+           (message "Playing movie: %s" (alist-get 'Name item)))))
+     (lambda (item)
+       (alist-get 'Name item)))))
+
+;;;###autoload
+(defun jellyfin-browse-movies-gallery-refetch-metadata ()
+  "Fetch all movies from the Jellyfin server and update the local cache.
+Also clears cached poster images for movies so they are re-fetched."
+  (interactive)
+  (jellyfin--ensure-auth)
+  (message "Fetching movies...")
+  ;; Clear disk-cached images for old items
+  (when jellyfin--movies-gallery-cache
+    (let ((dir (jellyfin--image-cache-dir)))
+      (seq-doseq (item jellyfin--movies-gallery-cache)
+        (let ((file (expand-file-name (alist-get 'Id item) dir)))
+          (when (file-exists-p file)
+            (delete-file file))
+          (remhash (alist-get 'Id item) jellyfin--preview-image-cache)))))
+  (setq jellyfin--movies-gallery-cache
+        (append (jellyfin--retry-if-empty
+                 (lambda () (jellyfin--get-items "Movie")))
+                nil))
+  (jellyfin--movies-gallery-cache-save)
+  (jellyfin--item-cache-populate jellyfin--movies-gallery-cache)
+  (message "Cached %d movies." (length jellyfin--movies-gallery-cache)))
+
 ;;;###autoload
 (defun jellyfin-browse-albums ()
   "Pick artist -> album -> queue all tracks to EMMS playlist."
@@ -1105,6 +1296,106 @@ preview; seasons and episodes use clickable drill-down in the buffer."
                series-choice
                (alist-get 'Name chosen-ep)
                (1- (length urls))))))
+
+(defvar jellyfin--shows-gallery-cache nil
+  "Cached list of series items from the Jellyfin server.")
+
+(defun jellyfin--shows-gallery-cache-file ()
+  "Return the path to the shows gallery cache file."
+  (expand-file-name "jellyfin-shows-gallery-cache.el" user-emacs-directory))
+
+(defun jellyfin--shows-gallery-cache-save ()
+  "Write `jellyfin--shows-gallery-cache' to disk."
+  (when jellyfin--shows-gallery-cache
+    (with-temp-file (jellyfin--shows-gallery-cache-file)
+      (prin1 jellyfin--shows-gallery-cache (current-buffer)))))
+
+(defun jellyfin--shows-gallery-cache-load ()
+  "Load `jellyfin--shows-gallery-cache' from disk if the file exists."
+  (let ((file (jellyfin--shows-gallery-cache-file)))
+    (when (file-exists-p file)
+      (with-temp-buffer
+        (insert-file-contents file)
+        (setq jellyfin--shows-gallery-cache (read (current-buffer))))
+      (jellyfin--item-cache-populate jellyfin--shows-gallery-cache))))
+
+;;;###autoload
+(defun jellyfin-browse-shows-gallery ()
+  "Browse TV shows as a responsive poster grid in a *Jellyfin* buffer.
+Like `jellyfin-browse-shows' but fully buffer-based with clickable
+poster images.  Requires graphical Emacs.
+Uses cached metadata when available; run
+`jellyfin-browse-shows-gallery-refetch-metadata' to refresh."
+  (interactive)
+  (unless (display-graphic-p)
+    (user-error "jellyfin-browse-shows-gallery requires graphical Emacs"))
+  (unless jellyfin--shows-gallery-cache
+    (jellyfin--shows-gallery-cache-load))
+  (unless jellyfin--shows-gallery-cache
+    (jellyfin-browse-shows-gallery-refetch-metadata))
+  (if (zerop (length jellyfin--shows-gallery-cache))
+      (message "No shows found on server.")
+    (let ((series-alist (mapcar (lambda (s) (cons (alist-get 'Name s) s))
+                                jellyfin--shows-gallery-cache)))
+      (setq jellyfin--show-preview-result nil)
+      (jellyfin--show-dired-render-grid
+       (mapcar #'cdr series-alist)
+       (lambda (item)
+         (lambda (_btn)
+           (jellyfin--show-preview-season item)))
+       (lambda (item)
+         (alist-get 'Name item)))
+      (condition-case nil
+          (progn
+            (recursive-edit)
+            (let ((result jellyfin--show-preview-result))
+              (jellyfin--preview-cleanup)
+              (unless result
+                (user-error "Aborted"))
+              (let* ((series-id (nth 0 result))
+                     (chosen-ep (nth 2 result))
+                     (episodes (nth 3 result))
+                     (chosen-id (alist-get 'Id chosen-ep))
+                     (found nil)
+                     (urls nil)
+                     (ep-ids nil))
+                (seq-doseq (ep episodes)
+                  (when (or found (equal (alist-get 'Id ep) chosen-id))
+                    (setq found t)
+                    (push (jellyfin--stream-url (alist-get 'Id ep) "Videos") urls)
+                    (push (alist-get 'Id ep) ep-ids)))
+                (setq urls (nreverse urls)
+                      ep-ids (nreverse ep-ids))
+                (jellyfin--mpv-play urls (apply #'vector ep-ids))
+                (message "Playing %s + %d more"
+                         (alist-get 'Name chosen-ep)
+                         (1- (length urls))))))
+        (quit
+         (jellyfin--preview-cleanup)
+         nil)))))
+
+;;;###autoload
+(defun jellyfin-browse-shows-gallery-refetch-metadata ()
+  "Fetch all shows from the Jellyfin server and update the local cache.
+Also clears cached poster images for shows so they are re-fetched."
+  (interactive)
+  (jellyfin--ensure-auth)
+  (message "Fetching shows...")
+  ;; Clear disk-cached images for old items
+  (when jellyfin--shows-gallery-cache
+    (let ((dir (jellyfin--image-cache-dir)))
+      (seq-doseq (item jellyfin--shows-gallery-cache)
+        (let ((file (expand-file-name (alist-get 'Id item) dir)))
+          (when (file-exists-p file)
+            (delete-file file))
+          (remhash (alist-get 'Id item) jellyfin--preview-image-cache)))))
+  (setq jellyfin--shows-gallery-cache
+        (append (jellyfin--retry-if-empty
+                 (lambda () (jellyfin--get-items "Series")))
+                nil))
+  (jellyfin--shows-gallery-cache-save)
+  (jellyfin--item-cache-populate jellyfin--shows-gallery-cache)
+  (message "Cached %d shows." (length jellyfin--shows-gallery-cache)))
 
 ;;;###autoload
 (defun jellyfin-browse-continue-watching ()

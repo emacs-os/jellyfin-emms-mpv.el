@@ -21,18 +21,28 @@ Media is discovered by type (Movie, Shows, Music, etc.) across all libraries on 
 | Command                                  | Description                                          |
 |------------------------------------------|------------------------------------------------------|
 | `M-x jellyfin-browse-movies`            | Pick a movie, open mpv                               |
+| `M-x jellyfin-browse-movies-gallery`   | Visual movie browser with poster grid (GUI only)     |
 | `M-x jellyfin-browse-shows`             | Series -> season -> pick episode, mpv plays through to end of season  |
+| `M-x jellyfin-browse-shows-gallery`    | Visual show browser with poster grid (GUI only)                      |
 | `M-x jellyfin-browse-continue-watching` | Resume a movie or show where you left off            |
 | `M-x jellyfin-browse-albums`            | Artist -> album -> queue tracks in EMMS              |
 | `M-x jellyfin-browse-playlists`         | Pick playlist -> queue tracks in EMMS                |
 | `M-x jellyfin-browse-songs`            | Dired-like song picker, mark with m, unmark with u, queue tracks in EMMS with RET |
 | `M-x jellyfin-browse-songs-refetch-metadata` | Re-fetch song list from server and update cache |
+| `M-x jellyfin-browse-movies-gallery-refetch-metadata` | Re-fetch movie list and posters from server |
+| `M-x jellyfin-browse-shows-gallery-refetch-metadata` | Re-fetch show list and posters from server |
 
-### Song picker cache
+### Metadata and image caching
 
-`jellyfin-browse-songs` caches the full song list to disk (`jellyfin-songs-cache.el` in `user-emacs-directory`) so only the first invocation is slow. After that the buffer opens instantly.
+`jellyfin-browse-songs`, `jellyfin-browse-movies-gallery`, and `jellyfin-browse-shows-gallery` cache their metadata to disk (in `user-emacs-directory`) so only the first invocation is slow. After that they open instantly.
 
-Run `M-x jellyfin-browse-songs-refetch-metadata` to update the cache when you've added, removed, or renamed songs on your Jellyfin server.
+Poster images are also cached to disk (`jellyfin-image-cache/` in `user-emacs-directory`) and shared across all commands — a poster fetched during `jellyfin-browse-movies` will be reused by `jellyfin-browse-movies-gallery` and vice versa.
+
+Run the corresponding refetch command to update the cache when you've added, removed, or renamed media on your Jellyfin server:
+
+- `M-x jellyfin-browse-songs-refetch-metadata`
+- `M-x jellyfin-browse-movies-gallery-refetch-metadata`
+- `M-x jellyfin-browse-shows-gallery-refetch-metadata`
 
 ## Installation
 
