@@ -139,13 +139,13 @@ Example config used during development:
 
 ## Configuration
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `jellyfin-server-url` | `nil` | Jellyfin server URL |
-| `jellyfin-preview` | `nil` | Poster previews while browsing (GUI Emacs) |
-| `jellyfin-preferred-language` | `nil` | Audio track language (ISO 639-2: `"eng"`, `"jpn"`) passed as `--alang` to mpv |
-| `jellyfin-subtitles` | `nil` | Show subtitles matching preferred language (`--slang`) |
-| `jellyfin-elcava-emms-experimental` | `nil` | Embedded spectrum visualizer in the EMMS playlist. Requires [elcava](https://github.com/emacs-os/elcava) + `parec`. Linux only. |
+| Variable | Type | Default | Description |
+|----------|------|---------|-------------|
+| `jellyfin-server-url` | `string` | `nil` | Jellyfin server URL (e.g. `"https://host.example.com"`) |
+| `jellyfin-preview` | `boolean` | `nil` | `t` to show poster previews while browsing (GUI Emacs only) |
+| `jellyfin-preferred-language` | `string` or `nil` | `nil` | ISO 639-2 three-letter audio language code: `"eng"`, `"fre"`, `"jpn"`, etc. Passed as `--alang` to mpv |
+| `jellyfin-subtitles` | `boolean` | `nil` | `t` to show subtitles matching `jellyfin-preferred-language` (`--slang`). Requires `jellyfin-preferred-language` to be set |
+| `jellyfin-elcava-emms-experimental` | `boolean` | `nil` | `t` to show an embedded spectrum visualizer in the EMMS playlist. Requires [elcava](https://github.com/emacs-os/elcava) + `parec`. Linux only |
 
 ## How it works
 
