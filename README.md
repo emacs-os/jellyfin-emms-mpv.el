@@ -21,7 +21,7 @@ Media is discovered by type (Movie, Shows, Music, etc.) across all libraries on 
 | Command                                  | Description                                          |
 |------------------------------------------|------------------------------------------------------|
 | `M-x jellyfin-browse-movies`            | Pick a movie, open mpv                               |
-| `M-x jellyfin-browse-shows`             | Series -> season -> pick episode, mpv plays through  |
+| `M-x jellyfin-browse-shows`             | Series -> season -> pick episode, mpv plays through to end of season  |
 | `M-x jellyfin-browse-continue-watching` | Resume a movie or show where you left off            |
 | `M-x jellyfin-browse-albums`            | Artist -> album -> queue tracks in EMMS              |
 | `M-x jellyfin-browse-playlists`         | Pick playlist -> queue tracks in EMMS                |
