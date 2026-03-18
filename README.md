@@ -34,15 +34,23 @@ Media is discovered by type (Movie, Shows, Music, etc.) across all libraries on 
 
 ### Metadata and image caching
 
-`jellyfin-browse-songs`, `jellyfin-browse-movies-gallery`, and `jellyfin-browse-shows-gallery` cache their metadata to disk (in `user-emacs-directory`) so only the first invocation is slow. After that they open instantly.
+`jellyfin-browse-songs`, `jellyfin-browse-movies-gallery`, and `jellyfin-browse-shows-gallery` cache their metadata to disk (in `user-emacs-directory`) so only the first invocation hits the server. After that they open instantly.
 
-Poster images are also cached to disk (`jellyfin-image-cache/` in `user-emacs-directory`) and shared across all commands — a poster fetched during `jellyfin-browse-movies` will be reused by `jellyfin-browse-movies-gallery` and vice versa.
+| Cache file                            | Command                              |
+|---------------------------------------|--------------------------------------|
+| `jellyfin-songs-cache.el`             | `jellyfin-browse-songs`              |
+| `jellyfin-movies-gallery-cache.el`    | `jellyfin-browse-movies-gallery`     |
+| `jellyfin-shows-gallery-cache.el`     | `jellyfin-browse-shows-gallery`      |
 
-Run the corresponding refetch command to update the cache when you've added, removed, or renamed media on your Jellyfin server:
+Poster images are cached separately in `jellyfin-image-cache/` (inside `user-emacs-directory`) and shared across all commands — a poster fetched during `jellyfin-browse-movies` will be reused by `jellyfin-browse-movies-gallery` and vice versa.
+
+Run the corresponding refetch command when you've added, removed, or renamed media on your Jellyfin server. Each one deletes the old metadata cache and its associated poster images, then re-fetches everything fresh:
 
 - `M-x jellyfin-browse-songs-refetch-metadata`
 - `M-x jellyfin-browse-movies-gallery-refetch-metadata`
 - `M-x jellyfin-browse-shows-gallery-refetch-metadata`
+
+`jellyfin-browse-continue-watching` always fetches fresh from the server (no cache) since the list changes every time you watch something.
 
 ## Installation
 
