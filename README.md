@@ -6,6 +6,7 @@ Browse and play music/video from a Jellyfin server via EMMS + mpv. Tracks playba
 
 ## Requirements
 
+- A Jellyfin server
 - EMMS
 - mpv
 
