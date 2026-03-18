@@ -148,6 +148,7 @@ Or with straight.el:
 | `jellyfin-preview`             | `nil`   | Show a preview buffer with posters and descriptions when browsing, requires graphical Emacs, fancier, but slower |
 | `jellyfin-preferred-language`  | `nil`   | Preferred audio language for video playback (ISO 639-2, e.g. `"eng"`, `"jpn"`). See below. |
 | `jellyfin-subtitles` | `nil`   | When non-nil, enable subtitles matching `jellyfin-preferred-language`. See below. |
+| `jellyfin-elcava-emms-experimental` | `nil` | Show an embedded audio spectrum visualizer in the EMMS playlist buffer. Requires [elcava](https://github.com/emacs-os/elcava) and `parec`. See below. |
 
 Most media files have a single audio track so language selection never comes up. For files with multiple audio tracks (e.g. foreign films with both original and dubbed audio, or anime with Japanese and English tracks), the player uses the container's default track which may not be the language you want. Setting `jellyfin-preferred-language` to a three-letter ISO 639-2 code (e.g. `"eng"`, `"jpn"`, `"fre"`) passes `--alang` to mpv, which selects the matching audio track without breaking direct play. Falls back to the container default if no match is found.
 
@@ -158,6 +159,27 @@ When `jellyfin-preview` is enabled:
 - **Movies**: a side buffer with poster images, titles, and descriptions updates as you type to narrow results. Clicking a title or poster selects that movie.
 - **Shows**: series selection works the same way; after picking a series the buffer becomes a clickable drill-down through seasons and episodes with images and descriptions at each level.
 - **Albums/Playlists**: album cover art is displayed at the top of the EMMS playlist buffer and updates dynamically as the current track changes. Falls back to artist image, then the Jellyfin server splash screen if no cover is found.
+
+## Embedded spectrum visualizer (experimental)
+
+When `jellyfin-elcava-emms-experimental` is non-nil, a small audio spectrum visualizer (12 bars, 6 rows) is rendered below the album cover art in the EMMS playlist buffer while music is playing. It captures system audio via PipeWire/PulseAudio and runs the same FFT + smoothing pipeline as standalone elcava.
+
+Requires:
+- [elcava](https://github.com/emacs-os/elcava) — install it as a package
+- `parec` (from PipeWire or PulseAudio)
+- Linux only
+
+```elisp
+(setq jellyfin-elcava-emms-experimental t)
+```
+
+The visualizer starts automatically when a track begins and stops when playback ends. Tunable via `setq` before starting playback:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `jellyfin--elcava-rows` | `6` | Height of the visualizer in text rows |
+
+Bar count (12) and framerate (30 fps) are set internally for lightweight embedded use.
 
 ---
 

@@ -114,6 +114,12 @@ if available.  Uses ISO 639-2 three-letter codes as returned by Jellyfin."
 Requires `jellyfin-preferred-language' to be set."
   :type 'boolean)
 
+(defcustom jellyfin-elcava-emms-experimental nil
+  "When non-nil, show an embedded elcava spectrum visualizer in the playlist.
+Displays a small bar visualizer below the album cover art.
+Requires the `elcava' package and `parec'."
+  :type 'boolean)
+
 (defvar jellyfin--token nil "Current session access token.")
 (defvar jellyfin--user-id nil "Current session user ID.")
 
@@ -1190,6 +1196,7 @@ Also clears cached poster images for movies so they are re-fetched."
     (jellyfin--add-jellyfin-tracks tracks)
     (jellyfin--playlist-insert-cover album-id artist-id)
     (add-hook 'emms-player-started-hook #'jellyfin--playlist-track-started)
+    (add-hook 'emms-player-started-hook #'jellyfin--elcava-track-started)
     (with-current-buffer emms-playlist-buffer
       (goto-char (point-min))
       (emms-playlist-mode-play-current-track))
@@ -1218,6 +1225,7 @@ Also clears cached poster images for movies so they are re-fetched."
       (jellyfin--playlist-insert-cover
        (or (alist-get 'AlbumId first) playlist-id) first-artist-id))
     (add-hook 'emms-player-started-hook #'jellyfin--playlist-track-started)
+    (add-hook 'emms-player-started-hook #'jellyfin--elcava-track-started)
     (with-current-buffer emms-playlist-buffer
       (goto-char (point-min))
       (emms-playlist-mode-play-current-track))
@@ -1634,6 +1642,7 @@ Populated by `jellyfin-browse-songs-refetch-metadata'.")
          (or (alist-get 'AlbumId first) (alist-get 'Id first))
          first-artist-id))
       (add-hook 'emms-player-started-hook #'jellyfin--playlist-track-started)
+      (add-hook 'emms-player-started-hook #'jellyfin--elcava-track-started)
       (switch-to-buffer emms-playlist-buffer)
       (message "Queued %d songs." (length items))
       (kill-buffer "*Jellyfin Songs*"))))
@@ -1676,6 +1685,151 @@ Uses cached metadata when available; run
   (jellyfin--songs-cache-save)
   (jellyfin--item-cache-populate jellyfin--songs-cache)
   (message "Cached %d songs." (length jellyfin--songs-cache)))
+
+;;; --- Embedded elcava visualizer ---
+;;
+;; Uses elcava.el as the underlying DSP library.  Configures it for
+;; 12 bars / 30 fps, reuses its FFT + smoothing pipeline, and renders
+;; into the EMMS playlist buffer instead of *elcava*.
+
+(defvar elcava--process)
+(defvar elcava--bars)
+(defvar elcava--colors)
+(defvar elcava--raw)
+(defvar elcava-bars)
+(defvar elcava-framerate)
+(declare-function elcava--cleanup "elcava")
+(declare-function elcava--init-tables "elcava")
+(declare-function elcava--init-freq-map "elcava")
+(declare-function elcava--init-smoothing "elcava")
+(declare-function elcava--init-colors "elcava")
+(declare-function elcava--init-char-cache "elcava")
+(declare-function elcava--start-capture "elcava")
+(declare-function elcava--drain-samples "elcava")
+(declare-function elcava--fft "elcava")
+(declare-function elcava--compute-bars "elcava")
+(declare-function elcava--smooth-bars "elcava")
+
+(defvar jellyfin--elcava-timer nil "Render timer for embedded visualizer.")
+(defvar jellyfin--elcava-rows 6 "Number of text rows for embedded visualizer.")
+
+(defun jellyfin--elcava-render ()
+  "Timer callback: compute spectrum via elcava, render into playlist buffer."
+  (condition-case nil
+      (when (and elcava--process
+                 (process-live-p elcava--process)
+                 (buffer-live-p emms-playlist-buffer))
+        ;; DSP: drain → FFT → bars → smooth (all elcava internals)
+        (if (elcava--drain-samples)
+            (progn (elcava--fft) (elcava--compute-bars))
+          (dotimes (i elcava-bars) (aset elcava--raw i 0.0)))
+        (elcava--smooth-bars)
+        ;; Render into playlist buffer (preserve cursor position)
+        (with-current-buffer emms-playlist-buffer
+          (let ((inhibit-read-only t)
+                (saved-pt (point))
+                (saved-win-pt (when-let ((w (get-buffer-window
+                                             emms-playlist-buffer t)))
+                                (cons w (window-point w))))
+                (blocks " ▁▂▃▄▅▆▇█")
+                (nbars elcava-bars)
+                (rows jellyfin--elcava-rows)
+                (bars elcava--bars)
+                (colors elcava--colors))
+            (save-excursion
+              (goto-char (point-min))
+              (let ((cover-end (point-min)))
+                ;; Skip past cover region
+                (while (and (< cover-end (point-max))
+                            (get-text-property cover-end 'jellyfin-cover))
+                  (setq cover-end (next-single-property-change
+                                   cover-end 'jellyfin-cover nil (point-max))))
+                ;; Remove old elcava region
+                (let ((elcava-start cover-end)
+                      (elcava-end cover-end))
+                  (while (and (< elcava-end (point-max))
+                              (get-text-property elcava-end 'jellyfin-elcava))
+                    (setq elcava-end (next-single-property-change
+                                      elcava-end 'jellyfin-elcava nil (point-max))))
+                  (when (> elcava-end elcava-start)
+                    (delete-region elcava-start elcava-end)))
+                ;; Insert new bars
+                (goto-char cover-end)
+                (let ((start (point)))
+                  (dotimes (r rows)
+                    (let ((row-bottom (* (- rows r 1) 8)))
+                      (dotimes (b nbars)
+                        (let* ((h (* (aref bars b) rows 8.0))
+                               (fill (min 8 (max 0 (truncate (- h row-bottom)))))
+                               (ch (char-to-string (aref blocks fill)))
+                               (color (aref colors b)))
+                          (insert (if (> fill 0)
+                                      (propertize ch 'face `(:foreground ,color))
+                                    ch))
+                          (when (< b (1- nbars))
+                            (insert " ")))))
+                    (insert "\n"))
+                  (put-text-property start (point) 'jellyfin-elcava t))))
+            ;; Restore window point so cursor doesn't jump
+            (goto-char saved-pt)
+            (when saved-win-pt
+              (set-window-point (car saved-win-pt) (cdr saved-win-pt))))))
+    (error nil)))
+
+(defun jellyfin--elcava-start ()
+  "Start embedded elcava visualizer in the EMMS playlist buffer.
+Requires the `elcava' package."
+  (when (and jellyfin-elcava-emms-experimental
+             (not jellyfin--elcava-timer))
+    (require 'elcava)
+    (unless (executable-find "parec")
+      (user-error "parec not found; install PipeWire or PulseAudio"))
+    ;; Configure elcava for embedded use
+    (elcava--cleanup)
+    (setq elcava-bars 24
+          elcava-framerate 30)
+    (elcava--init-tables)
+    (elcava--init-freq-map)
+    (elcava--init-smoothing)
+    (elcava--init-colors)
+    (elcava--init-char-cache)
+    (elcava--start-capture)
+    (setq jellyfin--elcava-timer
+          (run-at-time 0 (/ 1.0 elcava-framerate)
+                       #'jellyfin--elcava-render))))
+
+(defun jellyfin--elcava-stop ()
+  "Stop embedded elcava visualizer and clean up."
+  (when jellyfin--elcava-timer
+    (cancel-timer jellyfin--elcava-timer)
+    (setq jellyfin--elcava-timer nil))
+  (when (fboundp 'elcava--cleanup)
+    (elcava--cleanup))
+  ;; Remove elcava region from playlist buffer
+  (when (and (boundp 'emms-playlist-buffer)
+             (buffer-live-p emms-playlist-buffer))
+    (with-current-buffer emms-playlist-buffer
+      (let ((inhibit-read-only t))
+        (goto-char (point-min))
+        (let ((start (point-min))
+              (end (point-min)))
+          (while (and (< end (point-max))
+                      (not (get-text-property end 'jellyfin-elcava)))
+            (setq end (next-single-property-change
+                       end 'jellyfin-elcava nil (point-max))))
+          (when (get-text-property end 'jellyfin-elcava)
+            (setq start end)
+            (while (and (< end (point-max))
+                        (get-text-property end 'jellyfin-elcava))
+              (setq end (next-single-property-change
+                         end 'jellyfin-elcava nil (point-max))))
+            (delete-region start end)))))))
+
+(defun jellyfin--elcava-track-started ()
+  "Start embedded elcava when a track starts (if enabled)."
+  (when jellyfin-elcava-emms-experimental
+    (jellyfin--elcava-stop)
+    (jellyfin--elcava-start)))
 
 (provide 'jellyfin-emms-mpv)
 ;;; jellyfin-emms-mpv.el ends here
