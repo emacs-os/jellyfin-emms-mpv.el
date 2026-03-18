@@ -140,6 +140,7 @@ Requires the `elcava' package and `parec'."
 (defvar jellyfin--mpv-ipc-buf "" "Incomplete IPC data buffer.")
 (defvar jellyfin--mpv-socket nil "Path to mpv IPC socket file.")
 (defvar jellyfin--mpv-play-session-id nil "Random play session ID for Jellyfin reporting.")
+(defvar jellyfin--mpv-start-secs nil "Initial seek position for first playlist item only.")
 
 ;;; --- Authentication ---
 
@@ -543,7 +544,8 @@ on disk (`jellyfin-image-cache/' in `user-emacs-directory')."
         jellyfin--mpv-position nil
         jellyfin--mpv-paused nil
         jellyfin--mpv-playlist-pos nil
-        jellyfin--mpv-play-session-id nil))
+        jellyfin--mpv-play-session-id nil
+        jellyfin--mpv-start-secs nil))
 
 (defun jellyfin--mpv-ipc-filter (_proc output)
   "Process OUTPUT from mpv IPC socket, handling partial reads."
@@ -626,6 +628,13 @@ on disk (`jellyfin-image-cache/' in `user-emacs-directory')."
           ;; Start progress timer
           (setq jellyfin--mpv-timer
                 (run-at-time 5 30 #'jellyfin--mpv-poll))
+          ;; Seek to resume position for first episode only, then clear
+          (when jellyfin--mpv-start-secs
+            (process-send-string
+             jellyfin--mpv-ipc
+             (format "{\"command\":[\"seek\",\"%d\",\"absolute\"]}\n"
+                     jellyfin--mpv-start-secs))
+            (setq jellyfin--mpv-start-secs nil))
           ;; Report initial playing state
           (setq jellyfin--mpv-playlist-pos 0)
           (when (and jellyfin--mpv-item-ids
@@ -663,8 +672,8 @@ Cleans up any existing session first."
       (push (format "--alang=%s" jellyfin-preferred-language) args)
       (when jellyfin-subtitles
         (push (format "--slang=%s" jellyfin-preferred-language) args)))
-    (when (and start-secs (> start-secs 0))
-      (push (format "--start=%d" start-secs) args))
+    (setq jellyfin--mpv-start-secs (when (and start-secs (> start-secs 0))
+                                     start-secs))
     (setq jellyfin--mpv-socket sock
           jellyfin--mpv-item-ids item-ids
           jellyfin--mpv-ipc-buf ""
