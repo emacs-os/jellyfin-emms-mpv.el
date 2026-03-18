@@ -839,7 +839,6 @@ Shows a preview buffer with posters and descriptions as you type."
          ;; Get tracks
          (tracks (jellyfin--get-album-tracks album-id)))
     (require 'emms)
-    (emms-playlist-current-clear)
     (seq-doseq (track tracks)
       (let ((url (jellyfin--stream-url (alist-get 'Id track) "Audio"))
             (name (alist-get 'Name track)))
@@ -875,7 +874,6 @@ Shows a preview buffer with posters and descriptions as you type."
          (playlist-id (alist-get 'Id playlist))
          (tracks (jellyfin--get-playlist-items playlist-id)))
     (require 'emms)
-    (emms-playlist-current-clear)
     (seq-doseq (track tracks)
       (let* ((url (jellyfin--stream-url (alist-get 'Id track) "Audio"))
              (name (alist-get 'Name track))
