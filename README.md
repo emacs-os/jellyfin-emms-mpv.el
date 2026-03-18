@@ -175,7 +175,7 @@ When `jellyfin-preview` is enabled:
 
 ## Embedded spectrum visualizer (experimental)
 
-When `jellyfin-elcava-emms-experimental` is non-nil, a small audio spectrum visualizer (12 bars, 6 rows) is rendered below the album cover art in the EMMS playlist buffer while music is playing. It captures system audio via PipeWire/PulseAudio and runs the same FFT + smoothing pipeline as standalone elcava.
+When `jellyfin-elcava-emms-experimental` is non-nil, a 24-bar audio spectrum visualizer (6 rows tall) is rendered below the album cover art in the EMMS playlist buffer while music is playing. It captures system audio via PipeWire/PulseAudio and runs the same FFT + smoothing pipeline as standalone elcava at 30 fps.
 
 Requires:
 - [elcava](https://github.com/emacs-os/elcava) — install it as a package
@@ -186,13 +186,7 @@ Requires:
 (setq jellyfin-elcava-emms-experimental t)
 ```
 
-The visualizer starts automatically when a track begins and stops when playback ends. Tunable via `setq` before starting playback:
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `jellyfin--elcava-rows` | `6` | Height of the visualizer in text rows |
-
-Bar count (12) and framerate (30 fps) are set internally for lightweight embedded use.
+The visualizer starts automatically when a track begins and stops when playback ends.
 
 ---
 
