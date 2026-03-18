@@ -30,9 +30,9 @@ Browse and play music/video from a Jellyfin server via EMMS + mpv. Tracks playba
 | Command | Description |
 |---------|-------------|
 | `M-x jellyfin-browse-movies` | Pick a movie by typing in minibuffer, play in mpv |
-| `M-x jellyfin-browse-movies-gallery` | Poster grid (GUI only), click or RET to play |
+| `M-x jellyfin-browse-movies-gallery` | Poster grid (GUI only), point and click or cursor and RET |
 | `M-x jellyfin-browse-shows` | Series -> season -> episode by typing in minibuffer, plays through end of season |
-| `M-x jellyfin-browse-shows-gallery` | Poster grid drill-down (GUI only), dired-style |
+| `M-x jellyfin-browse-shows-gallery` | Poster grid drill-down (GUI only), point and click or cursor and RET |
 | `M-x jellyfin-browse-continue-watching` | Resume where you left off by typing in minibuffer |
 | `M-x jellyfin-browse-albums` | Artist -> album by typing in minibuffer, queue in EMMS |
 | `M-x jellyfin-browse-playlists` | Pick playlist by typing in minibuffer, queue in EMMS |
