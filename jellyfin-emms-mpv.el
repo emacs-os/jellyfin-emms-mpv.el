@@ -37,6 +37,8 @@
 ;;   M-x jellyfin-browse-continue-watching  — resume a movie or show where you left off
 ;;   M-x jellyfin-browse-albums             — artist -> album -> queue tracks in EMMS
 ;;   M-x jellyfin-browse-playlists          — pick playlist -> queue tracks in EMMS
+;;   M-x jellyfin-browse-songs              — dired-like song picker (cached; instant after first load)
+;;   M-x jellyfin-browse-songs-refetch-metadata — re-fetch after adding/removing songs on server
 ;;
 
 ;;; Code:
@@ -1065,6 +1067,194 @@ preview; seasons and episodes use clickable drill-down in the buffer."
                  (or (alist-get 'IndexNumber item) 0)
                  (1- (length urls))
                  (/ start-secs 60) (mod start-secs 60))))))
+
+;;; --- Cherry Picker (dired-like song selection) ---
+
+(defvar jellyfin--songs-cache nil
+  "Cached vector of song items from the Jellyfin server.
+Populated by `jellyfin-browse-songs-refetch-metadata'.")
+
+(defun jellyfin--songs-cache-file ()
+  "Return the path to the songs cache file."
+  (expand-file-name "jellyfin-songs-cache.el" user-emacs-directory))
+
+(defun jellyfin--songs-cache-save ()
+  "Write `jellyfin--songs-cache' to disk."
+  (when jellyfin--songs-cache
+    (with-temp-file (jellyfin--songs-cache-file)
+      (prin1 jellyfin--songs-cache (current-buffer)))))
+
+(defun jellyfin--songs-cache-load ()
+  "Load `jellyfin--songs-cache' from disk if the file exists."
+  (let ((file (jellyfin--songs-cache-file)))
+    (when (file-exists-p file)
+      (with-temp-buffer
+        (insert-file-contents file)
+        (setq jellyfin--songs-cache (read (current-buffer)))))))
+
+(defvar jellyfin--cherry-picker-mode-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "m") (lambda () (interactive) (jellyfin--cherry-picker-mark)))
+    (define-key map (kbd "u") (lambda () (interactive) (jellyfin--cherry-picker-unmark)))
+    (define-key map (kbd "U") (lambda () (interactive) (jellyfin--cherry-picker-unmark-all)))
+    (define-key map (kbd "t") (lambda () (interactive) (jellyfin--cherry-picker-toggle-all)))
+    (define-key map (kbd "RET") (lambda () (interactive) (jellyfin--cherry-picker-execute)))
+    (define-key map (kbd "q") (lambda () (interactive) (jellyfin--cherry-picker-quit)))
+    map)
+  "Keymap for `jellyfin--cherry-picker-mode'.")
+
+(define-derived-mode jellyfin--cherry-picker-mode special-mode "Jellyfin Songs"
+  "Major mode for cherry-picking songs from Jellyfin.
+\\{jellyfin--cherry-picker-mode-map}")
+
+(defun jellyfin--cherry-picker-render (songs)
+  "Render SONGS into the *Jellyfin Songs* buffer."
+  (let ((buf (get-buffer-create "*Jellyfin Songs*")))
+    (with-current-buffer buf
+      (jellyfin--cherry-picker-mode)
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (seq-doseq (item songs)
+          (let* ((artists (alist-get 'AlbumArtists item))
+                 (artist (if (and artists (> (length artists) 0))
+                             (alist-get 'Name (aref artists 0))
+                           "Unknown Artist"))
+                 (album (or (alist-get 'Album item) "Unknown Album"))
+                 (index (alist-get 'IndexNumber item))
+                 (title (alist-get 'Name item))
+                 (title-str (if index
+                                (format "%02d. %s" index title)
+                              title))
+                 (line (format "[ ]  %s — %s — %s" artist album title-str))
+                 (start (point)))
+            (insert line)
+            (put-text-property start (point) 'jellyfin-item item)
+            (insert "\n")))
+        (goto-char (point-min))))
+    (switch-to-buffer buf)
+    (message "%d songs loaded. m=mark, u=unmark, t=toggle, RET=queue, q=quit"
+             (length songs))))
+
+(defun jellyfin--cherry-picker-mark ()
+  "Mark the song on the current line and advance."
+  (let ((inhibit-read-only t))
+    (save-excursion
+      (beginning-of-line)
+      (when (looking-at "\\[ \\]")
+        (replace-match "[x]")))
+    (forward-line 1)))
+
+(defun jellyfin--cherry-picker-unmark ()
+  "Unmark the song on the current line and advance."
+  (let ((inhibit-read-only t))
+    (save-excursion
+      (beginning-of-line)
+      (when (looking-at "\\[x\\]")
+        (replace-match "[ ]")))
+    (forward-line 1)))
+
+(defun jellyfin--cherry-picker-unmark-all ()
+  "Unmark all songs in the buffer."
+  (let ((inhibit-read-only t))
+    (save-excursion
+      (goto-char (point-min))
+      (while (re-search-forward "^\\[x\\]" nil t)
+        (replace-match "[ ]")))))
+
+(defun jellyfin--cherry-picker-toggle-all ()
+  "Toggle marks on all songs in the buffer."
+  (let ((inhibit-read-only t))
+    (save-excursion
+      (goto-char (point-min))
+      (while (not (eobp))
+        (cond
+         ((looking-at "\\[x\\]") (replace-match "[ ]"))
+         ((looking-at "\\[ \\]") (replace-match "[x]")))
+        (forward-line 1)))))
+
+(defun jellyfin--cherry-picker-execute ()
+  "Append all marked songs to EMMS playlist and close the buffer."
+  (let ((items nil))
+    (save-excursion
+      (goto-char (point-min))
+      (while (not (eobp))
+        (when (looking-at "\\[x\\]")
+          (push (get-text-property (+ (line-beginning-position) 5)
+                                   'jellyfin-item)
+                items))
+        (forward-line 1)))
+    (if (null items)
+        (message "No songs marked.")
+      (setq items (nreverse items))
+      (require 'emms)
+      (let ((count 0)
+            (first-cover-id nil)
+            (first-artist-id nil))
+        (dolist (item items)
+          (let* ((id (alist-get 'Id item))
+                 (url (jellyfin--stream-url id "Audio"))
+                 (name (alist-get 'Name item))
+                 (album-id (alist-get 'AlbumId item))
+                 (artists (alist-get 'AlbumArtists item))
+                 (artist-id (and (> (length artists) 0)
+                                 (alist-get 'Id (aref artists 0)))))
+            (unless first-cover-id
+              (setq first-cover-id (or album-id id)
+                    first-artist-id artist-id))
+            (emms-add-url url)
+            (with-current-buffer emms-playlist-buffer
+              (save-excursion
+                (goto-char (point-max))
+                (forward-line -1)
+                (let ((emms-track (emms-playlist-track-at (point))))
+                  (emms-track-set emms-track 'info-title name)
+                  (emms-track-set emms-track 'jellyfin-cover-id
+                                  (or album-id id))
+                  (emms-track-set emms-track 'jellyfin-artist-id artist-id))))
+            (setq count (1+ count))))
+        (jellyfin--playlist-insert-cover first-cover-id first-artist-id)
+        (add-hook 'emms-player-started-hook #'jellyfin--playlist-track-started)
+        (switch-to-buffer emms-playlist-buffer)
+        (message "Queued %d songs." count))
+      (kill-buffer "*Jellyfin Songs*"))))
+
+(defun jellyfin--cherry-picker-quit ()
+  "Quit the cherry picker without queueing anything."
+  (kill-buffer (current-buffer)))
+
+;;;###autoload
+(defun jellyfin-browse-songs ()
+  "Open a dired-like buffer listing all songs for cherry-picking.
+Uses cached metadata when available; run
+`jellyfin-browse-songs-refetch-metadata' to refresh."
+  (interactive)
+  (unless jellyfin--songs-cache
+    (jellyfin--songs-cache-load))
+  (unless jellyfin--songs-cache
+    (jellyfin-browse-songs-refetch-metadata))
+  (if (zerop (length jellyfin--songs-cache))
+      (message "No songs found on server.")
+    (jellyfin--cherry-picker-render jellyfin--songs-cache)))
+
+;;;###autoload
+(defun jellyfin-browse-songs-refetch-metadata ()
+  "Fetch all songs from the Jellyfin server and update the local cache."
+  (interactive)
+  (jellyfin--ensure-auth)
+  (message "Fetching songs...")
+  (setq jellyfin--songs-cache
+        (jellyfin--retry-if-empty
+         (lambda ()
+           (alist-get 'Items
+             (jellyfin--api-get
+              (format "/Users/%s/Items" jellyfin--user-id)
+              '(("IncludeItemTypes" . "Audio")
+                ("Recursive" . "true")
+                ("SortBy" . "AlbumArtist,Album,IndexNumber")
+                ("SortOrder" . "Ascending")
+                ("Fields" . "MediaSources")))))))
+  (jellyfin--songs-cache-save)
+  (message "Cached %d songs." (length jellyfin--songs-cache)))
 
 (provide 'jellyfin-emms-mpv)
 ;;; jellyfin-emms-mpv.el ends here

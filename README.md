@@ -21,6 +21,14 @@ Media is discovered by type (Movie, Shows, Music, etc.) across all libraries on 
 | `M-x jellyfin-browse-continue-watching` | Resume a movie or show where you left off            |
 | `M-x jellyfin-browse-albums`            | Artist -> album -> queue tracks in EMMS              |
 | `M-x jellyfin-browse-playlists`         | Pick playlist -> queue tracks in EMMS                |
+| `M-x jellyfin-browse-songs`            | Dired-like song picker, mark with m, unmark with u, queue tracks in EMMS with RET |
+| `M-x jellyfin-browse-songs-refetch-metadata` | Re-fetch song list from server and update cache |
+
+### Song picker cache
+
+`jellyfin-browse-songs` caches the full song list to disk (`jellyfin-songs-cache.el` in `user-emacs-directory`) so only the first invocation is slow. After that the buffer opens instantly.
+
+Run `M-x jellyfin-browse-songs-refetch-metadata` to update the cache when you've added, removed, or renamed songs on your Jellyfin server.
 
 ## Installation
 
