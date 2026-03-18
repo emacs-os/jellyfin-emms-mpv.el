@@ -31,6 +31,7 @@
 ;;   - mpv
 ;;
 ;; Usage:
+;;   (setq jellyfin-preview t)               — enable poster/description preview
 ;;   M-x jellyfin-browse-movies             — pick a movie, open mpv
 ;;   M-x jellyfin-browse-shows              — series -> season -> pick episode, mpv plays through
 ;;   M-x jellyfin-browse-continue-watching  — resume a movie or show where you left off
@@ -49,6 +50,8 @@
 (declare-function emms-add-url "emms")
 (declare-function emms-playlist-track-at "emms")
 (declare-function emms-track-set "emms")
+(declare-function emms-track-get "emms")
+(declare-function emms-playlist-current-selected-track "emms")
 (declare-function emms-playlist-mode-play-current-track "emms-playlist-mode")
 
 (defvar url-http-end-of-headers)
@@ -62,6 +65,12 @@
 (defcustom jellyfin-server-url nil
   "Base URL of the Jellyfin server (e.g. \"https://host.example.com\")."
   :type 'string)
+
+(defcustom jellyfin-preview nil
+  "When non-nil, show a preview buffer with posters and descriptions
+while browsing movies and shows."
+  :type 'boolean)
+
 
 (defvar jellyfin--token nil "Current session access token.")
 (defvar jellyfin--user-id nil "Current session user ID.")
@@ -167,6 +176,20 @@ Callback just kills the response buffer."
   (format "%s/%s/%s/stream?Static=true&api_key=%s"
           jellyfin-server-url media-type id jellyfin--token))
 
+(defun jellyfin--retry-if-empty (fn &optional max-retries)
+  "Call FN.  If the result is an empty sequence, re-authenticate and retry.
+Retries up to MAX-RETRIES times (default 2)."
+  (let ((result (funcall fn))
+        (retries (or max-retries 2))
+        (attempts 0))
+    (while (and (zerop (length result))
+                (< attempts retries))
+      (setq attempts (1+ attempts)
+            jellyfin--token nil)
+      (jellyfin--ensure-auth)
+      (setq result (funcall fn)))
+    result))
+
 ;;; --- Fetching items ---
 
 (defun jellyfin--get-items (media-type &optional parent-id extra-params)
@@ -177,7 +200,7 @@ Returns the Items array."
                   ("Recursive" . "true")
                   ("SortBy" . "SortName")
                   ("SortOrder" . "Ascending")
-                  ("Fields" . "MediaSources"))))
+                  ("Fields" . "MediaSources,Overview"))))
     (when parent-id
       (push `("ParentId" . ,parent-id) params))
     (when extra-params
@@ -228,7 +251,8 @@ Returns the Items array."
   "Fetch seasons for SERIES-ID."
   (let ((resp (jellyfin--api-get
                (format "/Shows/%s/Seasons" series-id)
-               `(("userId" . ,jellyfin--user-id)))))
+               `(("userId" . ,jellyfin--user-id)
+                 ("Fields" . "Overview")))))
     (alist-get 'Items resp)))
 
 (defun jellyfin--get-episodes (series-id season-id)
@@ -237,8 +261,63 @@ Returns the Items array."
                (format "/Shows/%s/Episodes" series-id)
                `(("userId" . ,jellyfin--user-id)
                  ("seasonId" . ,season-id)
-                 ("Fields" . "MediaSources")))))
+                 ("Fields" . "MediaSources,Overview")))))
     (alist-get 'Items resp)))
+
+;;; --- Image fetching ---
+
+(defvar jellyfin--preview-image-cache (make-hash-table :test 'equal)
+  "Cache of item-id -> image data, persists across calls.")
+
+(defun jellyfin--fetch-image (item-id)
+  "Fetch poster image for ITEM-ID, returning an image descriptor or nil.
+Results are cached in `jellyfin--preview-image-cache'."
+  (or (gethash item-id jellyfin--preview-image-cache)
+      (condition-case nil
+          (let* ((url-show-status nil)
+                 (img-url (format "%s/Items/%s/Images/Primary?maxWidth=300&api_key=%s"
+                                  jellyfin-server-url item-id jellyfin--token))
+                 (tmp-file (make-temp-file "jellyfin-poster-")))
+            (url-copy-file img-url tmp-file t)
+            (unwind-protect
+                (when (and (file-exists-p tmp-file)
+                           (> (file-attribute-size (file-attributes tmp-file)) 0))
+                  (let* ((data (with-temp-buffer
+                                 (set-buffer-multibyte nil)
+                                 (insert-file-contents-literally tmp-file)
+                                 (buffer-string)))
+                         (image (create-image data nil t :width 300)))
+                    (when image
+                      (puthash item-id image jellyfin--preview-image-cache)
+                      image)))
+              (when (file-exists-p tmp-file)
+                (delete-file tmp-file))))
+        (error nil))))
+
+(defun jellyfin--fetch-splash-image ()
+  "Fetch the Jellyfin server splash screen as a fallback image.
+Returns an image descriptor or nil.  Cached under the key `splash'."
+  (or (gethash 'splash jellyfin--preview-image-cache)
+      (condition-case nil
+          (let* ((url-show-status nil)
+                 (img-url (format "%s/Branding/Splashscreen?api_key=%s"
+                                  jellyfin-server-url jellyfin--token))
+                 (tmp-file (make-temp-file "jellyfin-splash-")))
+            (url-copy-file img-url tmp-file t)
+            (unwind-protect
+                (when (and (file-exists-p tmp-file)
+                           (> (file-attribute-size (file-attributes tmp-file)) 0))
+                  (let* ((data (with-temp-buffer
+                                 (set-buffer-multibyte nil)
+                                 (insert-file-contents-literally tmp-file)
+                                 (buffer-string)))
+                         (image (create-image data nil t :width 300)))
+                    (when image
+                      (puthash 'splash image jellyfin--preview-image-cache)
+                      image)))
+              (when (file-exists-p tmp-file)
+                (delete-file tmp-file))))
+        (error nil))))
 
 ;;; --- Playback reporting ---
 
@@ -435,23 +514,305 @@ Cleans up any existing session first."
     ;; Give mpv time to create the socket
     (run-at-time 1 nil #'jellyfin--mpv-connect)))
 
+;;; --- Movie preview buffer ---
+
+(defvar jellyfin--preview-data nil
+  "Alist of (NAME . item) used during movie completion.")
+
+(define-derived-mode jellyfin--preview-mode special-mode "Jellyfin"
+  "Mode for the Jellyfin preview buffer."
+  (setq truncate-lines nil
+        word-wrap t
+        scroll-step 1
+        scroll-conservatively 10000)
+  (define-key jellyfin--preview-mode-map [wheel-up]
+              (lambda () (interactive) (scroll-down 1)))
+  (define-key jellyfin--preview-mode-map [wheel-down]
+              (lambda () (interactive) (scroll-up 1))))
+
+(defun jellyfin--preview-render (matches)
+  "Render MATCHES (alist of name.item) into the *Jellyfin* buffer."
+  (let ((buf (get-buffer-create "*Jellyfin*")))
+    (with-current-buffer buf
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (jellyfin--preview-mode)
+        (if (> (length matches) 20)
+            (insert (format "%d movies -- type to narrow\n" (length matches)))
+          (dolist (entry matches)
+            (let* ((name (car entry))
+                   (item (cdr entry))
+                   (id (alist-get 'Id item))
+                   (overview (or (alist-get 'Overview item) "")))
+              ;; Poster image (GUI only)
+              (when (display-graphic-p)
+                (when-let ((image (jellyfin--fetch-image id)))
+                  (insert-text-button "[poster]"
+                                      'display image
+                                      'action (lambda (_btn)
+                                                (jellyfin--preview-select name))
+                                      'follow-link t)
+                  (insert "\n")))
+              ;; Clickable title
+              (insert-text-button name
+                                  'action (lambda (_btn)
+                                            (jellyfin--preview-select name))
+                                  'follow-link t
+                                  'face 'bold)
+              (insert "\n")
+              ;; Overview
+              (unless (string-empty-p overview)
+                (insert overview "\n"))
+              (insert "\n"))))))
+    (display-buffer buf
+                    '(display-buffer-use-some-window
+                      (inhibit-same-window . t)))))
+
+(defun jellyfin--preview-select (name)
+  "Insert NAME into the active minibuffer and exit."
+  (when-let ((mini (active-minibuffer-window)))
+    (with-selected-window mini
+      (delete-minibuffer-contents)
+      (insert name)
+      (exit-minibuffer))))
+
+(defun jellyfin--preview-update ()
+  "Post-command-hook callback: update the preview buffer.
+Only shows the preview once the user has typed something.
+Uses `completion-all-completions' to respect the user's completion styles."
+  (condition-case nil
+      (when jellyfin--preview-data
+        (let ((input (minibuffer-contents-no-properties)))
+          (if (string-empty-p input)
+              ;; No input yet -- hide preview if visible
+              (when-let ((buf (get-buffer "*Jellyfin*")))
+                (when-let ((win (get-buffer-window buf t)))
+                  (delete-window win)))
+            (let* ((completions (completion-all-completions
+                                 input
+                                 minibuffer-completion-table
+                                 minibuffer-completion-predicate
+                                 (length input)))
+                   ;; Result is a dotted list; snip the base-size off the last cdr
+                   (_ (when (consp completions)
+                        (setcdr (last completions) nil)))
+                   ;; Apply the display sort function if available
+                   (md (completion-metadata
+                        input
+                        minibuffer-completion-table
+                        minibuffer-completion-predicate))
+                   (sort-fn (or (completion-metadata-get md 'display-sort-function)
+                                #'identity))
+                   (sorted (funcall sort-fn completions))
+                   (matches (delq nil
+                                (mapcar (lambda (c)
+                                          (assoc c jellyfin--preview-data))
+                                        sorted))))
+              (jellyfin--preview-render matches)))))
+    (error nil)))
+
+(defun jellyfin--preview-cleanup ()
+  "Minibuffer-exit-hook callback: kill preview buffer and clear state."
+  (when-let ((buf (get-buffer "*Jellyfin*")))
+    (when-let ((win (get-buffer-window buf t)))
+      (when (not (one-window-p t (window-frame win)))
+        (delete-window win)))
+    (kill-buffer buf))
+  (setq jellyfin--preview-data nil))
+
+;;; --- Show preview drill-down ---
+
+(defvar jellyfin--show-preview-result nil
+  "Stores the selected result during show preview drill-down.
+Set by episode button, read after `recursive-edit' returns.")
+
+(defun jellyfin--show-preview-render-items (items make-action make-label
+                                                  &optional header)
+  "Render ITEMS into the *Jellyfin* buffer for show drill-down.
+MAKE-ACTION is called with an item and returns a button action function.
+MAKE-LABEL is called with an item and returns its display label string.
+HEADER, if non-nil, is a function called to insert header content at top."
+  (let ((buf (get-buffer-create "*Jellyfin*")))
+    (with-current-buffer buf
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (jellyfin--preview-mode)
+        (when header
+          (funcall header)
+          (insert "\n"))
+        (dolist (item items)
+          (let ((id (alist-get 'Id item))
+                (overview (or (alist-get 'Overview item) ""))
+                (action (funcall make-action item))
+                (label (funcall make-label item)))
+            (when (display-graphic-p)
+              (when-let ((image (jellyfin--fetch-image id)))
+                (insert-text-button "[poster]"
+                                    'display image
+                                    'action action
+                                    'follow-link t)
+                (insert "\n")))
+            (insert-text-button label
+                                'action action
+                                'follow-link t
+                                'face 'bold)
+            (insert "\n")
+            (unless (string-empty-p overview)
+              (insert overview "\n"))
+            (insert "\n"))))
+      (goto-char (point-min)))
+    (switch-to-buffer buf)))
+
+(defun jellyfin--show-preview-series (series-alist)
+  "Render SERIES-ALIST in the *Jellyfin* buffer.
+Each entry is (NAME . item).  Clicking a series drills into seasons."
+  (jellyfin--show-preview-render-items
+   (mapcar #'cdr series-alist)
+   (lambda (item)
+     (lambda (_btn)
+       (jellyfin--show-preview-season item)))
+   (lambda (item)
+     (alist-get 'Name item))))
+
+(defun jellyfin--show-preview-season (series-item)
+  "Fetch and render seasons for SERIES-ITEM.
+Shows series info as header, season list below."
+  (let* ((series-id (alist-get 'Id series-item))
+         (series-name (alist-get 'Name series-item))
+         (seasons (jellyfin--get-seasons series-id)))
+    (jellyfin--show-preview-render-items
+     (append seasons nil)
+     (lambda (item)
+       (lambda (_btn)
+         (jellyfin--show-preview-episodes series-item item)))
+     (lambda (item)
+       (alist-get 'Name item))
+     (lambda ()
+       (when (display-graphic-p)
+         (when-let ((image (jellyfin--fetch-image series-id)))
+           (insert-image image "[poster]")
+           (insert "\n")))
+       (insert (propertize series-name 'face 'bold) "\n")
+       (let ((overview (or (alist-get 'Overview series-item) "")))
+         (unless (string-empty-p overview)
+           (insert overview "\n")))))))
+
+(defun jellyfin--show-preview-episodes (series-item season-item)
+  "Fetch and render episodes for SERIES-ITEM / SEASON-ITEM.
+Shows series+season header, episode list below.
+Clicking an episode stores the result and exits recursive-edit."
+  (let* ((series-id (alist-get 'Id series-item))
+         (series-name (alist-get 'Name series-item))
+         (season-id (alist-get 'Id season-item))
+         (season-name (alist-get 'Name season-item))
+         (season-num (alist-get 'IndexNumber season-item))
+         (episodes (jellyfin--get-episodes series-id season-id)))
+    (jellyfin--show-preview-render-items
+     (append episodes nil)
+     (lambda (item)
+       (lambda (_btn)
+         (setq jellyfin--show-preview-result
+               (list series-id season-item item episodes))
+         (exit-recursive-edit)))
+     (lambda (item)
+       (format "S%02dE%02d — %s"
+               (or season-num 0)
+               (or (alist-get 'IndexNumber item) 0)
+               (alist-get 'Name item)))
+     (lambda ()
+       (insert (propertize series-name 'face 'bold) "\n")
+       (when (display-graphic-p)
+         (when-let ((image (jellyfin--fetch-image season-id)))
+           (insert-image image "[poster]")
+           (insert "\n")))
+       (insert (propertize season-name 'face 'bold) "\n")))))
+
+(defun jellyfin--show-preview-pick-episode (series-item)
+  "Show drill-down buffer for SERIES-ITEM seasons and episodes.
+Uses `recursive-edit' to wait for selection.
+Returns (SERIES-ID SEASON-ITEM CHOSEN-EP EPISODES) or nil if aborted."
+  (setq jellyfin--show-preview-result nil)
+  (jellyfin--show-preview-season series-item)
+  (condition-case nil
+      (progn
+        (recursive-edit)
+        jellyfin--show-preview-result)
+    (quit
+     (jellyfin--preview-cleanup)
+     nil)))
+
+;;; --- Playlist cover art ---
+
+(defun jellyfin--playlist-insert-cover (item-id &optional fallback-id)
+  "Insert or replace cover image at top of EMMS playlist buffer.
+Tries ITEM-ID first, then FALLBACK-ID, then the server splash screen.
+Requires `jellyfin-preview' and GUI Emacs."
+  (when (and jellyfin-preview (display-graphic-p))
+    (let ((image (or (and item-id (jellyfin--fetch-image item-id))
+                     (and fallback-id (jellyfin--fetch-image fallback-id))
+                     (jellyfin--fetch-splash-image))))
+      (with-current-buffer emms-playlist-buffer
+        (let ((inhibit-read-only t))
+          ;; Always remove existing cover region
+          (goto-char (point-min))
+          (let ((end (point-min)))
+            (while (and (< end (point-max))
+                        (get-text-property end 'jellyfin-cover))
+              (setq end (next-single-property-change end 'jellyfin-cover
+                                                     nil (point-max))))
+            (when (> end (point-min))
+              (delete-region (point-min) end)))
+          ;; Insert new cover at top if we have one
+          (when image
+            (goto-char (point-min))
+            (let ((start (point)))
+              (insert-image image "[cover]")
+              (insert "\n")
+              (put-text-property start (point) 'jellyfin-cover t)))
+          ;; Force window to show the update
+          (when-let ((win (get-buffer-window emms-playlist-buffer t)))
+            (set-window-point win (point-min))))))))
+
+(defun jellyfin--playlist-track-started ()
+  "Update playlist cover art when a new track starts playing.
+Tries album cover first, falls back to artist image."
+  (when (and jellyfin-preview (display-graphic-p))
+    (when-let ((track (emms-playlist-current-selected-track)))
+      (jellyfin--playlist-insert-cover
+       (emms-track-get track 'jellyfin-cover-id)
+       (emms-track-get track 'jellyfin-artist-id)))))
+
 ;;; --- Interactive commands ---
 
 ;;;###autoload
 (defun jellyfin-browse-movies ()
-  "Pick a movie from Jellyfin and play it in mpv."
+  "Pick a movie from Jellyfin and play it in mpv.
+Shows a preview buffer with posters and descriptions as you type."
   (interactive)
   (jellyfin--ensure-auth)
-  (let* ((items (jellyfin--get-items "Movie"))
+  (let* ((items (jellyfin--retry-if-empty
+                 (lambda () (jellyfin--get-items "Movie"))))
          (names (mapcar (lambda (item)
                           (cons (alist-get 'Name item) item))
-                        items))
-         (choice (completing-read "Play movie: " (mapcar #'car names) nil t))
-         (item (cdr (assoc choice names)))
-         (id (alist-get 'Id item))
-         (url (jellyfin--stream-url id "Videos")))
-    (jellyfin--mpv-play (list url) (vector id))
-    (message "Playing movie: %s" choice)))
+                        items)))
+    (let ((choice (if jellyfin-preview
+                      (progn
+                        (setq jellyfin--preview-data names)
+                        (minibuffer-with-setup-hook
+                            (lambda ()
+                              (add-hook 'post-command-hook
+                                        #'jellyfin--preview-update nil t)
+                              (add-hook 'minibuffer-exit-hook
+                                        #'jellyfin--preview-cleanup nil t))
+                          (completing-read "Play movie: "
+                                           (mapcar #'car names) nil t)))
+                    (completing-read "Play movie: "
+                                     (mapcar #'car names) nil t))))
+      (when-let* ((item (cdr (assoc choice names)))
+                  (id (alist-get 'Id item))
+                  (url (jellyfin--stream-url id "Videos")))
+        (jellyfin--mpv-play (list url) (vector id))
+        (message "Playing movie: %s" choice)))))
 
 ;;;###autoload
 (defun jellyfin-browse-albums ()
@@ -459,7 +820,7 @@ Cleans up any existing session first."
   (interactive)
   (jellyfin--ensure-auth)
   (let* (;; Pick artist
-         (artists (jellyfin--get-artists))
+         (artists (jellyfin--retry-if-empty #'jellyfin--get-artists))
          (artist-names (mapcar (lambda (a) (cons (alist-get 'Name a) a))
                                artists))
          (artist-choice (completing-read "Artist: "
@@ -486,8 +847,12 @@ Cleans up any existing session first."
           (save-excursion
             (goto-char (point-max))
             (forward-line -1)
-            (emms-track-set (emms-playlist-track-at (point))
-                            'info-title name)))))
+            (let ((emms-track (emms-playlist-track-at (point))))
+              (emms-track-set emms-track 'info-title name)
+              (emms-track-set emms-track 'jellyfin-cover-id album-id)
+              (emms-track-set emms-track 'jellyfin-artist-id artist-id))))))
+    (jellyfin--playlist-insert-cover album-id artist-id)
+    (add-hook 'emms-player-started-hook #'jellyfin--playlist-track-started)
     (with-current-buffer emms-playlist-buffer
       (goto-char (point-min))
       (emms-playlist-mode-play-current-track))
@@ -500,7 +865,7 @@ Cleans up any existing session first."
   "Pick a playlist -> queue all tracks to EMMS playlist."
   (interactive)
   (jellyfin--ensure-auth)
-  (let* ((playlists (jellyfin--get-playlists))
+  (let* ((playlists (jellyfin--retry-if-empty #'jellyfin--get-playlists))
          (playlist-names (mapcar (lambda (p) (cons (alist-get 'Name p) p))
                                  playlists))
          (choice (completing-read "Playlist: "
@@ -511,15 +876,28 @@ Cleans up any existing session first."
     (require 'emms)
     (emms-playlist-current-clear)
     (seq-doseq (track tracks)
-      (let ((url (jellyfin--stream-url (alist-get 'Id track) "Audio"))
-            (name (alist-get 'Name track)))
+      (let* ((url (jellyfin--stream-url (alist-get 'Id track) "Audio"))
+             (name (alist-get 'Name track))
+             (cover-id (or (alist-get 'AlbumId track) playlist-id))
+             (artists (alist-get 'AlbumArtists track))
+             (artist-id (and (> (length artists) 0)
+                             (alist-get 'Id (aref artists 0)))))
         (emms-add-url url)
         (with-current-buffer emms-playlist-buffer
           (save-excursion
             (goto-char (point-max))
             (forward-line -1)
-            (emms-track-set (emms-playlist-track-at (point))
-                            'info-title name)))))
+            (let ((emms-track (emms-playlist-track-at (point))))
+              (emms-track-set emms-track 'info-title name)
+              (emms-track-set emms-track 'jellyfin-cover-id cover-id)
+              (emms-track-set emms-track 'jellyfin-artist-id artist-id))))))
+    (let* ((first (aref tracks 0))
+           (first-artists (alist-get 'AlbumArtists first))
+           (first-artist-id (and (> (length first-artists) 0)
+                                 (alist-get 'Id (aref first-artists 0)))))
+      (jellyfin--playlist-insert-cover
+       (or (alist-get 'AlbumId first) playlist-id) first-artist-id))
+    (add-hook 'emms-player-started-hook #'jellyfin--playlist-track-started)
     (with-current-buffer emms-playlist-buffer
       (goto-char (point-min))
       (emms-playlist-mode-play-current-track))
@@ -528,74 +906,107 @@ Cleans up any existing session first."
 
 ;;;###autoload
 (defun jellyfin-browse-shows ()
-  "Browse TV shows: Series -> Season -> Episode, then play in mpv."
+  "Browse TV shows: Series -> Season -> Episode, then play in mpv.
+When `jellyfin-preview' is non-nil, shows a preview buffer with
+images and descriptions.  Series selection uses completing-read with
+preview; seasons and episodes use clickable drill-down in the buffer."
   (interactive)
   (jellyfin--ensure-auth)
-  (let* (;; Pick series
-         (series (jellyfin--get-items "Series"))
+  (let* ((series (jellyfin--retry-if-empty
+                   (lambda () (jellyfin--get-items "Series"))))
          (series-alist (mapcar (lambda (s) (cons (alist-get 'Name s) s))
                                series))
-         (series-choice (completing-read "Series: "
-                                         (mapcar #'car series-alist) nil t))
-         (series-item (cdr (assoc series-choice series-alist)))
-         (series-id (alist-get 'Id series-item))
-         ;; Pick season
-         (seasons (jellyfin--get-seasons series-id))
-         (season-alist (mapcar (lambda (s) (cons (alist-get 'Name s) s))
-                               seasons))
-         (season-choice (completing-read "Season: "
-                                         (mapcar #'car season-alist) nil t))
-         (season-item (cdr (assoc season-choice season-alist)))
-         (season-id (alist-get 'Id season-item))
-         (season-num (alist-get 'IndexNumber season-item))
-         ;; Get episodes
-         (episodes (jellyfin--get-episodes series-id season-id))
-         (episode-alist
-          (mapcar (lambda (ep)
-                    (cons (format "S%02dE%02d — %s"
-                                  (or season-num 0)
-                                  (or (alist-get 'IndexNumber ep) 0)
-                                  (alist-get 'Name ep))
-                          ep))
-                  episodes))
-         (ep-choice (completing-read "Episode: "
-                                     (lambda (str pred action)
-                                       (if (eq action 'metadata)
-                                           '(metadata (display-sort-function . identity))
-                                         (complete-with-action
-                                          action (mapcar #'car episode-alist)
-                                          str pred)))
-                                     nil t))
-         (chosen-ep (cdr (assoc ep-choice episode-alist)))
-         (chosen-id (alist-get 'Id chosen-ep))
-         ;; Collect this episode + all remaining
-         (found nil)
-         (urls nil)
-         (ep-ids nil))
-    (seq-doseq (ep episodes)
-      (when (or found (equal (alist-get 'Id ep) chosen-id))
-        (setq found t)
-        (push (jellyfin--stream-url (alist-get 'Id ep) "Videos") urls)
-        (push (alist-get 'Id ep) ep-ids)))
-    (setq urls (nreverse urls))
-    (setq ep-ids (nreverse ep-ids))
-    (jellyfin--mpv-play urls (apply #'vector ep-ids))
-    (message "Playing %s — %s + %d more"
-             series-choice ep-choice (1- (length urls)))))
+         series-choice series-item series-id
+         season-item season-id season-num
+         episodes chosen-ep)
+    ;; Step 1: Pick series
+    (if jellyfin-preview
+        (progn
+          (setq jellyfin--preview-data series-alist)
+          (setq series-choice
+                (minibuffer-with-setup-hook
+                    (lambda ()
+                      (add-hook 'post-command-hook
+                                #'jellyfin--preview-update nil t)
+                      (add-hook 'minibuffer-exit-hook
+                                #'jellyfin--preview-cleanup nil t))
+                  (completing-read "Series: "
+                                   (mapcar #'car series-alist) nil t))))
+      (setq series-choice
+            (completing-read "Series: "
+                             (mapcar #'car series-alist) nil t)))
+    (setq series-item (cdr (assoc series-choice series-alist))
+          series-id (alist-get 'Id series-item))
+    ;; Step 2: Pick season + episode
+    (if jellyfin-preview
+        (let ((result (jellyfin--show-preview-pick-episode series-item)))
+          (unless result
+            (user-error "Aborted"))
+          (setq series-id (nth 0 result)
+                season-item (nth 1 result)
+                chosen-ep (nth 2 result)
+                episodes (nth 3 result))
+          (jellyfin--preview-cleanup))
+      ;; Non-preview: completing-read for season and episode
+      (let* ((seasons (jellyfin--get-seasons series-id))
+             (season-alist (mapcar (lambda (s) (cons (alist-get 'Name s) s))
+                                   seasons))
+             (season-choice (completing-read "Season: "
+                                             (mapcar #'car season-alist) nil t)))
+        (setq season-item (cdr (assoc season-choice season-alist))
+              season-id (alist-get 'Id season-item)
+              season-num (alist-get 'IndexNumber season-item)
+              episodes (jellyfin--get-episodes series-id season-id))
+        (let* ((episode-alist
+                (mapcar (lambda (ep)
+                          (cons (format "S%02dE%02d — %s"
+                                        (or season-num 0)
+                                        (or (alist-get 'IndexNumber ep) 0)
+                                        (alist-get 'Name ep))
+                                ep))
+                        episodes))
+               (ep-choice (completing-read "Episode: "
+                                           (lambda (str pred action)
+                                             (if (eq action 'metadata)
+                                                 '(metadata (display-sort-function . identity))
+                                               (complete-with-action
+                                                action (mapcar #'car episode-alist)
+                                                str pred)))
+                                           nil t)))
+          (setq chosen-ep (cdr (assoc ep-choice episode-alist))))))
+    ;; Step 3: Play from chosen episode onward
+    (let ((chosen-id (alist-get 'Id chosen-ep))
+          (found nil)
+          (urls nil)
+          (ep-ids nil))
+      (seq-doseq (ep episodes)
+        (when (or found (equal (alist-get 'Id ep) chosen-id))
+          (setq found t)
+          (push (jellyfin--stream-url (alist-get 'Id ep) "Videos") urls)
+          (push (alist-get 'Id ep) ep-ids)))
+      (setq urls (nreverse urls)
+            ep-ids (nreverse ep-ids))
+      (jellyfin--mpv-play urls (apply #'vector ep-ids))
+      (message "Playing %s — %s + %d more"
+               series-choice
+               (alist-get 'Name chosen-ep)
+               (1- (length urls))))))
 
 ;;;###autoload
 (defun jellyfin-browse-continue-watching ()
   "Resume a movie or show from Jellyfin's Continue Watching list."
   (interactive)
   (jellyfin--ensure-auth)
-  (let* ((resp (jellyfin--api-get
-                "/UserItems/Resume"
-                `(("userId" . ,jellyfin--user-id)
-                  ("enableUserData" . "true")
-                  ("mediaTypes" . "Video")
-                  ("limit" . "20")
-                  ("fields" . "MediaSources"))))
-         (items (alist-get 'Items resp))
+  (let* ((items (jellyfin--retry-if-empty
+                  (lambda ()
+                    (alist-get 'Items
+                               (jellyfin--api-get
+                                "/UserItems/Resume"
+                                `(("userId" . ,jellyfin--user-id)
+                                  ("enableUserData" . "true")
+                                  ("mediaTypes" . "Video")
+                                  ("limit" . "20")
+                                  ("fields" . "MediaSources")))))))
          (labels (mapcar
                   (lambda (item)
                     (let* ((type (alist-get 'Type item))

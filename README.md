@@ -58,6 +58,25 @@ Note: custom port auth-source matching is untested. Please report any issues.
   (setq jellyfin-server-url "https://your-server.example.com"))
 ```
 
+## Configuration
+
+| Variable                  | Default | Description                                                      |
+|---------------------------|---------|------------------------------------------------------------------|
+| `jellyfin-server-url`     | `nil`   | Base URL of your Jellyfin server                                 |
+| `jellyfin-preview`        | `nil`   | Show a preview buffer with posters and descriptions when browsing |
+
+When `jellyfin-preview` is enabled:
+
+- **Movies**: a side buffer with poster images, titles, and descriptions updates as you type to narrow results. Clicking a title or poster selects that movie.
+- **Shows**: series selection works the same way; after picking a series the buffer becomes a clickable drill-down through seasons and episodes with images and descriptions at each level.
+- **Albums/Playlists**: album cover art is displayed at the top of the EMMS playlist buffer and updates dynamically as the current track changes. Falls back to artist image, then the Jellyfin server splash screen if no cover is found.
+
+Works in GUI Emacs (images require graphical display); in terminal Emacs the preview shows titles and descriptions only.
+
+```elisp
+(setq jellyfin-preview t)
+```
+
 ---
 
 ## How it Works
