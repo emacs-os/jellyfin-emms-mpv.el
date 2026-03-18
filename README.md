@@ -68,6 +68,21 @@ Note: custom port auth-source matching is untested. Please report any issues.
         jellyfin-preview t))
 ```
 
+### EMMS configuration
+
+The following is the Elpaca EMMS configuration used personally during development and testing. It is not required to be this way, but is here for informational purposes:
+
+```elisp
+(use-package emms
+  :ensure t
+  :defer t
+  :config
+  (require 'emms-setup)
+  (emms-all)
+  (setq emms-player-list '(emms-player-mpv))
+  (setq emms-player-mpv-parameters '("--no-video")))
+```
+
 ## Configuration
 
 | Variable                  | Default | Description                                                      |
@@ -80,12 +95,6 @@ When `jellyfin-preview` is enabled:
 - **Movies**: a side buffer with poster images, titles, and descriptions updates as you type to narrow results. Clicking a title or poster selects that movie.
 - **Shows**: series selection works the same way; after picking a series the buffer becomes a clickable drill-down through seasons and episodes with images and descriptions at each level.
 - **Albums/Playlists**: album cover art is displayed at the top of the EMMS playlist buffer and updates dynamically as the current track changes. Falls back to artist image, then the Jellyfin server splash screen if no cover is found.
-
-Works in GUI Emacs (images require graphical display); in terminal Emacs the preview shows titles and descriptions only.
-
-```elisp
-(setq jellyfin-preview t)
-```
 
 ---
 
