@@ -628,16 +628,23 @@ Cleans up any existing session first."
 (defvar jellyfin--preview-data nil
   "Alist of (NAME . item) used during movie completion.")
 
-(define-derived-mode jellyfin--preview-mode special-mode "Jellyfin"
-  "Mode for the Jellyfin preview buffer."
-  (setq truncate-lines nil
+(defvar jellyfin--preview-mode-map
+  (let ((map (make-sparse-keymap)))
+    (set-keymap-parent map special-mode-map)
+    (define-key map [wheel-up] (lambda () (interactive) (scroll-down 1)))
+    (define-key map [wheel-down] (lambda () (interactive) (scroll-up 1)))
+    map)
+  "Keymap for the Jellyfin preview buffer.")
+
+(defun jellyfin--preview-mode ()
+  "Set up the current buffer as a Jellyfin preview buffer."
+  (special-mode)
+  (use-local-map jellyfin--preview-mode-map)
+  (setq mode-name "Jellyfin"
+        truncate-lines nil
         word-wrap t
         scroll-step 1
-        scroll-conservatively 10000)
-  (define-key jellyfin--preview-mode-map [wheel-up]
-              (lambda () (interactive) (scroll-down 1)))
-  (define-key jellyfin--preview-mode-map [wheel-down]
-              (lambda () (interactive) (scroll-up 1))))
+        scroll-conservatively 10000))
 
 (defun jellyfin--preview-render (matches)
   "Render MATCHES (alist of name.item) into the *Jellyfin* buffer."
@@ -1174,6 +1181,7 @@ Populated by `jellyfin-browse-songs-refetch-metadata'.")
 
 (defvar jellyfin--cherry-picker-mode-map
   (let ((map (make-sparse-keymap)))
+    (set-keymap-parent map special-mode-map)
     (define-key map (kbd "m") (lambda () (interactive) (jellyfin--cherry-picker-mark)))
     (define-key map (kbd "u") (lambda () (interactive) (jellyfin--cherry-picker-unmark)))
     (define-key map (kbd "U") (lambda () (interactive) (jellyfin--cherry-picker-unmark-all)))
@@ -1181,11 +1189,13 @@ Populated by `jellyfin-browse-songs-refetch-metadata'.")
     (define-key map (kbd "RET") (lambda () (interactive) (jellyfin--cherry-picker-execute)))
     (define-key map (kbd "q") (lambda () (interactive) (jellyfin--cherry-picker-quit)))
     map)
-  "Keymap for `jellyfin--cherry-picker-mode'.")
+  "Keymap for the Jellyfin cherry picker buffer.")
 
-(define-derived-mode jellyfin--cherry-picker-mode special-mode "Jellyfin Songs"
-  "Major mode for cherry-picking songs from Jellyfin.
-\\{jellyfin--cherry-picker-mode-map}")
+(defun jellyfin--cherry-picker-mode ()
+  "Set up the current buffer as a Jellyfin cherry picker buffer."
+  (special-mode)
+  (use-local-map jellyfin--cherry-picker-mode-map)
+  (setq mode-name "Jellyfin Songs"))
 
 (defun jellyfin--cherry-picker-render (songs)
   "Render SONGS into the *Jellyfin Songs* buffer."
