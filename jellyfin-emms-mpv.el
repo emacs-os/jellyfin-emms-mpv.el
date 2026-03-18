@@ -654,15 +654,17 @@ Cleans up any existing session first."
         (erase-buffer)
         (jellyfin--preview-mode)
         (if (> (length matches) 20)
-            (insert (format "%d movies -- type to narrow\n" (length matches)))
+            (insert (format "%d items -- type to narrow\n" (length matches)))
           (dolist (entry matches)
             (let* ((name (car entry))
                    (item (cdr entry))
                    (id (alist-get 'Id item))
+                   (image-id (or (alist-get 'SeriesId item) id))
                    (overview (or (alist-get 'Overview item) "")))
               ;; Poster image (GUI only)
               (when (display-graphic-p)
-                (when-let ((image (jellyfin--fetch-image id)))
+                (when-let ((image (or (jellyfin--fetch-image image-id)
+                                      (jellyfin--fetch-image id))))
                   (insert-text-button "[poster]"
                                       'display image
                                       'action (lambda (_btn)
@@ -1093,7 +1095,7 @@ preview; seasons and episodes use clickable drill-down in the buffer."
                                   ("enableUserData" . "true")
                                   ("mediaTypes" . "Video")
                                   ("limit" . "20")
-                                  ("fields" . "MediaSources")))))))
+                                  ("fields" . "MediaSources,Overview")))))))
          (labels (mapcar
                   (lambda (item)
                     (let* ((type (alist-get 'Type item))
@@ -1112,12 +1114,27 @@ preview; seasons and episodes use clickable drill-down in the buffer."
                       (cons label item)))
                   items))
          (cands (mapcar #'car labels))
-         (choice (completing-read "Continue watching: "
-                                  (lambda (str pred action)
-                                    (if (eq action 'metadata)
-                                        '(metadata (display-sort-function . identity))
-                                      (complete-with-action action cands str pred)))
-                                  nil t))
+         (choice (if jellyfin-preview
+                     (progn
+                       (setq jellyfin--preview-data labels)
+                       (minibuffer-with-setup-hook
+                           (lambda ()
+                             (add-hook 'post-command-hook
+                                       #'jellyfin--preview-update nil t)
+                             (add-hook 'minibuffer-exit-hook
+                                       #'jellyfin--preview-cleanup nil t))
+                         (completing-read "Continue watching: "
+                                          (lambda (str pred action)
+                                            (if (eq action 'metadata)
+                                                '(metadata (display-sort-function . identity))
+                                              (complete-with-action action cands str pred)))
+                                          nil t)))
+                   (completing-read "Continue watching: "
+                                    (lambda (str pred action)
+                                      (if (eq action 'metadata)
+                                          '(metadata (display-sort-function . identity))
+                                        (complete-with-action action cands str pred)))
+                                    nil t)))
          (item (cdr (assoc choice labels)))
          (type (alist-get 'Type item))
          (id (alist-get 'Id item))
