@@ -6,7 +6,7 @@ Browse and play music/video from a Jellyfin server via EMMS + mpv. Tracks playba
 
 ## Assumptions
 
-- Your Jellyfin libraries are named "Movies", "Shows", and "Playlists"
+- Your Jellyfin libraries are named "Movies", "Shows", "Music", and "Playlists"
 - EMMS is installed
 - mpv is installed
 
@@ -32,12 +32,20 @@ machine your-server.example.com login USERNAME password PASSWORD
 
 ```elisp
 (use-package jellyfin-emms-mpv
+  :defer t
   :ensure (:host github :repo "emacs-os/jellyfin-emms-mpv.el")
-  :commands (jellyfin-browse-movies jellyfin-browse-albums
-             jellyfin-browse-playlists jellyfin-browse-shows
-             jellyfin-browse-continue-watching)
-  :custom
-  (jellyfin-server-url "https://your-server.example.com"))
+  :config
+  (setq jellyfin-server-url "https://your-server.example.com"))
+```
+
+### With straight.el
+
+```elisp
+(use-package jellyfin-emms-mpv
+  :defer t
+  :straight (:host github :repo "emacs-os/jellyfin-emms-mpv.el")
+  :config
+  (setq jellyfin-server-url "https://your-server.example.com"))
 ```
 
 ## License
