@@ -563,7 +563,8 @@ Cleans up any existing session first."
               ;; Overview
               (unless (string-empty-p overview)
                 (insert overview "\n"))
-              (insert "\n"))))))
+              (insert "\n")))))
+      (goto-char (point-min)))
     (display-buffer buf
                     '(display-buffer-use-some-window
                       (inhibit-same-window . t)))))
