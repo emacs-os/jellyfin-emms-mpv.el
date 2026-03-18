@@ -146,6 +146,7 @@ while browsing movies and shows."
          (user (plist-get found :user))
          (secret (plist-get found :secret))
          (password (if (functionp secret) (funcall secret) secret))
+         (url-show-status nil)
          (url-request-method "POST")
          (url-request-extra-headers
           `(("Content-Type" . "application/json")
@@ -175,6 +176,7 @@ Returns parsed JSON."
                                           (url-hexify-string (cdr p))))
                                 params "&"))
                   ""))
+         (url-show-status nil)
          (url-request-method "GET")
          (url-request-extra-headers
           `(("X-Emby-Authorization" . ,(jellyfin--auth-header))))
@@ -188,7 +190,8 @@ Returns parsed JSON."
 (defun jellyfin--api-post-async (path body)
   "Fire-and-forget async POST to PATH with BODY alist.
 Callback just kills the response buffer."
-  (let ((url-request-method "POST")
+  (let ((url-show-status nil)
+        (url-request-method "POST")
         (url-request-extra-headers
          `(("Content-Type" . "application/json")
            ("X-Emby-Authorization" . ,(jellyfin--auth-header))))
@@ -628,6 +631,9 @@ Cleans up any existing session first."
 (defvar jellyfin--preview-data nil
   "Alist of (NAME . item) used during movie completion.")
 
+(defvar jellyfin--preview-timer nil
+  "Idle timer used to debounce preview updates.")
+
 (defvar jellyfin--preview-mode-map
   (let ((map (make-sparse-keymap)))
     (set-keymap-parent map special-mode-map)
@@ -695,43 +701,62 @@ Cleans up any existing session first."
       (insert name)
       (exit-minibuffer))))
 
+(defvar jellyfin--preview-last-input nil
+  "Last input string that triggered a preview update.
+Used to avoid redundant renders when input hasn't changed.")
+
 (defun jellyfin--preview-update ()
-  "Post-command-hook callback: update the preview buffer.
-Only shows the preview once the user has typed something.
+  "Post-command-hook callback: schedule a debounced preview update.
+Waits for 0.15 seconds of idle time before rendering so Emacs
+stays responsive while the user types."
+  (when jellyfin--preview-timer
+    (cancel-timer jellyfin--preview-timer)
+    (setq jellyfin--preview-timer nil))
+  (setq jellyfin--preview-timer
+        (run-with-idle-timer 0.15 nil #'jellyfin--preview-update-now)))
+
+(defun jellyfin--preview-update-now ()
+  "Actually update the preview buffer.
 Uses `completion-all-completions' to respect the user's completion styles."
+  (setq jellyfin--preview-timer nil)
   (condition-case nil
-      (when jellyfin--preview-data
+      (when (and jellyfin--preview-data (minibufferp (current-buffer)))
         (let ((input (minibuffer-contents-no-properties)))
           (if (string-empty-p input)
-              ;; No input yet -- hide preview if visible
-              (when-let ((buf (get-buffer "*Jellyfin*")))
-                (when-let ((win (get-buffer-window buf t)))
-                  (delete-window win)))
-            (let* ((completions (completion-all-completions
-                                 input
-                                 minibuffer-completion-table
-                                 minibuffer-completion-predicate
-                                 (length input)))
-                   ;; Result is a dotted list; snip the base-size off the last cdr
-                   (_ (when (consp completions)
-                        (setcdr (last completions) nil)))
-                   ;; Apply the display sort function if available
-                   (md (completion-metadata
-                        input
-                        minibuffer-completion-table
-                        minibuffer-completion-predicate))
-                   (sort-fn (or (completion-metadata-get md 'display-sort-function)
-                                #'identity))
-                   (sorted (funcall sort-fn completions))
-                   (matches (delq nil
-                                (mapcar (lambda (c)
-                                          (assoc c jellyfin--preview-data))
-                                        sorted))))
-              (jellyfin--preview-render matches)))))
+              (progn
+                (setq jellyfin--preview-last-input nil)
+                (when-let ((buf (get-buffer "*Jellyfin*")))
+                  (when-let ((win (get-buffer-window buf t)))
+                    (delete-window win))))
+            (unless (equal input jellyfin--preview-last-input)
+              (setq jellyfin--preview-last-input input)
+              (let* ((completions (completion-all-completions
+                                   input
+                                   minibuffer-completion-table
+                                   minibuffer-completion-predicate
+                                   (length input)))
+                     (_ (when (consp completions)
+                          (setcdr (last completions) nil)))
+                     (md (completion-metadata
+                          input
+                          minibuffer-completion-table
+                          minibuffer-completion-predicate))
+                     (sort-fn (or (completion-metadata-get md 'display-sort-function)
+                                  #'identity))
+                     (sorted (funcall sort-fn completions))
+                     (matches (delq nil
+                                  (mapcar (lambda (c)
+                                            (assoc c jellyfin--preview-data))
+                                          sorted))))
+                (jellyfin--preview-render matches))))))
     (error nil)))
 
 (defun jellyfin--preview-cleanup ()
   "Minibuffer-exit-hook callback: kill preview buffer and clear state."
+  (when jellyfin--preview-timer
+    (cancel-timer jellyfin--preview-timer)
+    (setq jellyfin--preview-timer nil))
+  (setq jellyfin--preview-last-input nil)
   (when-let ((buf (get-buffer "*Jellyfin*")))
     (when-let ((win (get-buffer-window buf t)))
       (when (not (one-window-p t (window-frame win)))
