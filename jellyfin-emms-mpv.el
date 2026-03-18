@@ -109,6 +109,11 @@ When set, video streams will use the audio track matching this language
 if available.  Uses ISO 639-2 three-letter codes as returned by Jellyfin."
   :type '(choice (const nil) string))
 
+(defcustom jellyfin-subtitles nil
+  "When non-nil, enable subtitles matching `jellyfin-preferred-language'.
+Requires `jellyfin-preferred-language' to be set."
+  :type 'boolean)
+
 (defvar jellyfin--token nil "Current session access token.")
 (defvar jellyfin--user-id nil "Current session user ID.")
 
@@ -649,7 +654,9 @@ Cleans up any existing session first."
                         (emacs-pid)))
          (args (list (concat "--input-ipc-server=" sock))))
     (when jellyfin-preferred-language
-      (push (format "--alang=%s" jellyfin-preferred-language) args))
+      (push (format "--alang=%s" jellyfin-preferred-language) args)
+      (when jellyfin-subtitles
+        (push (format "--slang=%s" jellyfin-preferred-language) args)))
     (when (and start-secs (> start-secs 0))
       (push (format "--start=%d" start-secs) args))
     (setq jellyfin--mpv-socket sock
