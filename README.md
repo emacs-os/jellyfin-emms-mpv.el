@@ -12,8 +12,8 @@ Browse and play music/video from a Jellyfin server via EMMS + mpv. Tracks playba
   <img src="screenshot_jellyfin_emms_elcava.png" width="965">
 </p>
 <table><tr>
-<td><img src="screencast_movies.gif" width="480"></td>
-<td><img src="screencast_shows.gif" width="480"></td>
+<td><img src="screencast_movies.gif" width="320"></td>
+<td><img src="screencast_shows.gif" width="320"></td>
 </tr></table>
 
 ## Requirements
