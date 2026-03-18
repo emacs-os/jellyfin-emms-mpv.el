@@ -30,6 +30,12 @@ Add your Jellyfin credentials to `~/.authinfo`:
 machine your-server.example.com login USERNAME password PASSWORD
 ```
 
+If your server uses a custom port (e.g. `http://your-server.example.com:8096`), use the hostname only in the `machine` field:
+
+```
+machine your-server.example.com port 8096 login USERNAME password PASSWORD
+```
+
 ### With Elpaca
 
 ```elisp
