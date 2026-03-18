@@ -10,7 +10,7 @@ Browse and play music/video from a Jellyfin server via EMMS + mpv. Tracks playba
 - EMMS
 - mpv
 
-Media is discovered by type (Movie, Shows, Music, etc.) across all libraries on the server — library names and folder structure don't matter.
+Media is discovered by type (Movie, Shows, Music, etc.) across all libraries on the server - library names and folder structure don't matter.
 
 ## Usage
 
