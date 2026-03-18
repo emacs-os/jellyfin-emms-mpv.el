@@ -68,6 +68,24 @@ Note: custom port auth-source matching is untested. Please report any issues.
         jellyfin-preview t))
 ```
 
+### mpv (required for movies/shows)
+
+mpv handles virtually every codec and container format out of the box, so all streams are direct play (no server-side transcoding needed).
+
+```bash
+# Arch
+sudo pacman -S mpv
+
+# Debian / Ubuntu
+sudo apt-get install mpv
+
+# Fedora
+sudo dnf install mpv
+
+# macOS
+brew install mpv
+```
+
 ### EMMS configuration
 
 The following is the Elpaca EMMS configuration used personally during development and testing. It is not required to be this way, but is here for informational purposes:
