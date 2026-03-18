@@ -40,6 +40,14 @@
 ;;   M-x jellyfin-browse-songs              — dired-like song picker (cached; instant after first load)
 ;;   M-x jellyfin-browse-songs-refetch-metadata — re-fetch after adding/removing songs on server
 ;;
+;; EMMS integration:
+;;   Audio commands integrate via EMMS's native extension points:
+;;   - `emms-info-jellyfin' is an info method (registered in `emms-info-functions')
+;;     that resolves Jellyfin stream URLs to standard EMMS metadata (info-title,
+;;     info-artist, info-album, info-tracknumber).
+;;   - An in-memory item cache (`jellyfin--item-cache') backs metadata lookups so
+;;     the info method resolves instantly with no extra API calls.
+;;
 
 ;;; Code:
 
@@ -53,11 +61,16 @@
 (declare-function emms-playlist-track-at "emms")
 (declare-function emms-track-set "emms")
 (declare-function emms-track-get "emms")
+(declare-function emms-track "emms")
+(declare-function emms-track-type "emms")
+(declare-function emms-track-name "emms")
+(declare-function emms-playlist-insert-track "emms")
 (declare-function emms-playlist-current-selected-track "emms")
 (declare-function emms-playlist-mode-play-current-track "emms-playlist-mode")
 
 (defvar url-http-end-of-headers)
 (defvar emms-playlist-buffer)
+(defvar emms-info-functions)
 
 (defgroup jellyfin nil
   "Jellyfin media server client."
@@ -248,6 +261,77 @@ Returns the Items array."
                  ("SortOrder" . "Ascending")
                  ("Fields" . "MediaSources")))))
     (alist-get 'Items resp)))
+
+(defun jellyfin--get-item-by-id (id)
+  "Fetch a single item by ID from Jellyfin."
+  (jellyfin--ensure-auth)
+  (jellyfin--api-get (format "/Users/%s/Items/%s" jellyfin--user-id id)))
+
+;;; --- EMMS integration (info method + source) ---
+
+(defvar jellyfin--item-cache (make-hash-table :test 'equal)
+  "Hash table mapping Jellyfin item IDs to item alists.")
+
+(defun jellyfin--item-cache-populate (items)
+  "Populate the item ID cache from ITEMS sequence."
+  (seq-doseq (item items)
+    (puthash (alist-get 'Id item) item jellyfin--item-cache)))
+
+(defun jellyfin--extract-item-id (url)
+  "Extract the Jellyfin item ID from a stream URL."
+  (when (string-match "/Audio/\\([^/]+\\)/stream" url)
+    (match-string 1 url)))
+
+(defun jellyfin--lookup-item-by-url (url)
+  "Look up a Jellyfin item by its stream URL.
+Checks the in-memory item cache first, falls back to API."
+  (when-let ((id (jellyfin--extract-item-id url)))
+    (or (gethash id jellyfin--item-cache)
+        (let ((item (jellyfin--get-item-by-id id)))
+          (when item
+            (puthash id item jellyfin--item-cache))
+          item))))
+
+(defun emms-info-jellyfin (track)
+  "Add Jellyfin metadata to TRACK if it is a Jellyfin stream URL.
+This is a suitable element for `emms-info-functions'."
+  (when (and jellyfin-server-url
+             (eq (emms-track-type track) 'url)
+             (string-prefix-p jellyfin-server-url (emms-track-name track)))
+    (when-let ((item (jellyfin--lookup-item-by-url (emms-track-name track))))
+      (let* ((artists (alist-get 'AlbumArtists item))
+             (artist-name (and (> (length artists) 0)
+                               (alist-get 'Name (aref artists 0))))
+             (artist-id (and (> (length artists) 0)
+                             (alist-get 'Id (aref artists 0)))))
+        (emms-track-set track 'info-title (alist-get 'Name item))
+        (when artist-name
+          (emms-track-set track 'info-artist artist-name))
+        (when (alist-get 'Album item)
+          (emms-track-set track 'info-album (alist-get 'Album item)))
+        (when (alist-get 'IndexNumber item)
+          (emms-track-set track 'info-tracknumber
+                          (number-to-string (alist-get 'IndexNumber item))))
+        (emms-track-set track 'jellyfin-cover-id
+                        (or (alist-get 'AlbumId item) (alist-get 'Id item)))
+        (when artist-id
+          (emms-track-set track 'jellyfin-artist-id artist-id))))))
+
+(with-eval-after-load 'emms
+  (add-to-list 'emms-info-functions #'emms-info-jellyfin))
+
+(defun jellyfin--add-jellyfin-tracks (items)
+  "Add Jellyfin audio ITEMS to the EMMS playlist.
+ITEMS is a sequence of Jellyfin item alists.  Each item is cached
+so `emms-info-jellyfin' can resolve metadata without API calls."
+  (require 'emms)
+  (jellyfin--item-cache-populate items)
+  (seq-doseq (item items)
+    (let* ((id (alist-get 'Id item))
+           (url (jellyfin--stream-url id "Audio")))
+      (emms-add-url url))))
+
+;;; --- Fetching shows/seasons/episodes ---
 
 (defun jellyfin--get-seasons (series-id)
   "Fetch seasons for SERIES-ID."
@@ -840,19 +924,7 @@ Shows a preview buffer with posters and descriptions as you type."
          (album-id (alist-get 'Id album))
          ;; Get tracks
          (tracks (jellyfin--get-album-tracks album-id)))
-    (require 'emms)
-    (seq-doseq (track tracks)
-      (let ((url (jellyfin--stream-url (alist-get 'Id track) "Audio"))
-            (name (alist-get 'Name track)))
-        (emms-add-url url)
-        (with-current-buffer emms-playlist-buffer
-          (save-excursion
-            (goto-char (point-max))
-            (forward-line -1)
-            (let ((emms-track (emms-playlist-track-at (point))))
-              (emms-track-set emms-track 'info-title name)
-              (emms-track-set emms-track 'jellyfin-cover-id album-id)
-              (emms-track-set emms-track 'jellyfin-artist-id artist-id))))))
+    (jellyfin--add-jellyfin-tracks tracks)
     (jellyfin--playlist-insert-cover album-id artist-id)
     (add-hook 'emms-player-started-hook #'jellyfin--playlist-track-started)
     (with-current-buffer emms-playlist-buffer
@@ -875,23 +947,7 @@ Shows a preview buffer with posters and descriptions as you type."
          (playlist (cdr (assoc choice playlist-names)))
          (playlist-id (alist-get 'Id playlist))
          (tracks (jellyfin--get-playlist-items playlist-id)))
-    (require 'emms)
-    (seq-doseq (track tracks)
-      (let* ((url (jellyfin--stream-url (alist-get 'Id track) "Audio"))
-             (name (alist-get 'Name track))
-             (cover-id (or (alist-get 'AlbumId track) playlist-id))
-             (artists (alist-get 'AlbumArtists track))
-             (artist-id (and (> (length artists) 0)
-                             (alist-get 'Id (aref artists 0)))))
-        (emms-add-url url)
-        (with-current-buffer emms-playlist-buffer
-          (save-excursion
-            (goto-char (point-max))
-            (forward-line -1)
-            (let ((emms-track (emms-playlist-track-at (point))))
-              (emms-track-set emms-track 'info-title name)
-              (emms-track-set emms-track 'jellyfin-cover-id cover-id)
-              (emms-track-set emms-track 'jellyfin-artist-id artist-id))))))
+    (jellyfin--add-jellyfin-tracks tracks)
     (let* ((first (aref tracks 0))
            (first-artists (alist-get 'AlbumArtists first))
            (first-artist-id (and (> (length first-artists) 0)
@@ -1090,7 +1146,8 @@ Populated by `jellyfin-browse-songs-refetch-metadata'.")
     (when (file-exists-p file)
       (with-temp-buffer
         (insert-file-contents file)
-        (setq jellyfin--songs-cache (read (current-buffer)))))))
+        (setq jellyfin--songs-cache (read (current-buffer))))
+      (jellyfin--item-cache-populate jellyfin--songs-cache))))
 
 (defvar jellyfin--cherry-picker-mode-map
   (let ((map (make-sparse-keymap)))
@@ -1186,36 +1243,17 @@ Populated by `jellyfin-browse-songs-refetch-metadata'.")
     (if (null items)
         (message "No songs marked.")
       (setq items (nreverse items))
-      (require 'emms)
-      (let ((count 0)
-            (first-cover-id nil)
-            (first-artist-id nil))
-        (dolist (item items)
-          (let* ((id (alist-get 'Id item))
-                 (url (jellyfin--stream-url id "Audio"))
-                 (name (alist-get 'Name item))
-                 (album-id (alist-get 'AlbumId item))
-                 (artists (alist-get 'AlbumArtists item))
-                 (artist-id (and (> (length artists) 0)
-                                 (alist-get 'Id (aref artists 0)))))
-            (unless first-cover-id
-              (setq first-cover-id (or album-id id)
-                    first-artist-id artist-id))
-            (emms-add-url url)
-            (with-current-buffer emms-playlist-buffer
-              (save-excursion
-                (goto-char (point-max))
-                (forward-line -1)
-                (let ((emms-track (emms-playlist-track-at (point))))
-                  (emms-track-set emms-track 'info-title name)
-                  (emms-track-set emms-track 'jellyfin-cover-id
-                                  (or album-id id))
-                  (emms-track-set emms-track 'jellyfin-artist-id artist-id))))
-            (setq count (1+ count))))
-        (jellyfin--playlist-insert-cover first-cover-id first-artist-id)
-        (add-hook 'emms-player-started-hook #'jellyfin--playlist-track-started)
-        (switch-to-buffer emms-playlist-buffer)
-        (message "Queued %d songs." count))
+      (jellyfin--add-jellyfin-tracks items)
+      (let* ((first (car items))
+             (first-artists (alist-get 'AlbumArtists first))
+             (first-artist-id (and (> (length first-artists) 0)
+                                   (alist-get 'Id (aref first-artists 0)))))
+        (jellyfin--playlist-insert-cover
+         (or (alist-get 'AlbumId first) (alist-get 'Id first))
+         first-artist-id))
+      (add-hook 'emms-player-started-hook #'jellyfin--playlist-track-started)
+      (switch-to-buffer emms-playlist-buffer)
+      (message "Queued %d songs." (length items))
       (kill-buffer "*Jellyfin Songs*"))))
 
 (defun jellyfin--cherry-picker-quit ()
@@ -1254,6 +1292,7 @@ Uses cached metadata when available; run
                 ("SortOrder" . "Ascending")
                 ("Fields" . "MediaSources")))))))
   (jellyfin--songs-cache-save)
+  (jellyfin--item-cache-populate jellyfin--songs-cache)
   (message "Cached %d songs." (length jellyfin--songs-cache)))
 
 (provide 'jellyfin-emms-mpv)

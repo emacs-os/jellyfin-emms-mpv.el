@@ -89,15 +89,34 @@ Works in GUI Emacs (images require graphical display); in terminal Emacs the pre
 
 ## How it Works
 
-**Video** (movies, shows, continue-watching): Spawns mpv directly via `start-process`, completely bypassing EMMS. Movies are a single `completing-read` pick; shows add two more steps (series -> season -> episode), then generate an m3u playlist from the chosen episode through the end of the selected season so mpv plays them in sequence. Playback position is tracked via mpv's IPC socket and reported to Jellyfin's session API for "Continue Watching" progress.
+### Video (movies, shows, continue-watching)
+
+Spawns mpv directly via `start-process`, completely bypassing EMMS. Movies are a single `completing-read` pick; shows add two more steps (series -> season -> episode), then generate an m3u playlist from the chosen episode through the end of the selected season so mpv plays them in sequence. Playback position is tracked via mpv's IPC socket and reported to Jellyfin's session API for "Continue Watching" progress.
 
 Resuming a movie seeks to the saved position. Resuming an episode fetches the remaining episodes in that season and builds a playlist from the resumed episode through the end of the season, seeking to the saved position in the first entry.
 
-**Audio** (albums, playlists): Uses EMMS's normal player system (`emms-add-url`, `emms-playlist-mode-play-current-track`), so it respects `emms-player-list`. If someone has VLC or another player configured instead of mpv, EMMS will use that for audio. No Jellyfin progress reporting is done for audio playback.
-
-The jellyfin Music library commands use emms-add-url + emms-track-set to manually decorate tracks in EMMS after adding them.
-
 The mpv requirement is only for video. Audio works with whatever EMMS player the user already has configured.
+
+### Audio (albums, playlists, song picker)
+
+Audio integrates with EMMS using its native extension points rather than ad-hoc track decoration:
+
+**Info method** (`emms-info-jellyfin`): Registered in `emms-info-functions` via `with-eval-after-load`. When EMMS creates a track, this function checks if the URL points at the configured Jellyfin server. If so, it looks up the item metadata and sets standard EMMS keys:
+
+| Key                | Source                        |
+|--------------------|-------------------------------|
+| `info-title`       | Song name                     |
+| `info-artist`      | Album artist name             |
+| `info-album`       | Album name                    |
+| `info-tracknumber` | Track number within album     |
+
+It also sets `jellyfin-cover-id` and `jellyfin-artist-id` for cover art display.
+
+Because metadata flows through EMMS's own info pipeline, track information is available everywhere EMMS expects it (playlist display, modeline, etc.) without any manual post-insertion fixup.
+
+**Item cache**: Metadata lookups are backed by an in-memory hash table (`jellyfin--item-cache`) keyed by Jellyfin item ID. The song picker's disk cache and each browse command pre-populate this table before adding tracks, so the info method resolves instantly with no extra API calls. On a cache miss (e.g. a track added by something else), it falls back to a single API request and caches the result.
+
+**Playback**: Uses EMMS's normal player system (`emms-player-list`), so it respects whatever player the user has configured (mpv, VLC, etc.). No Jellyfin progress reporting is done for audio.
 
 ## License
 
