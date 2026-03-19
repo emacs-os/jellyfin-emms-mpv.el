@@ -488,6 +488,27 @@ on disk (`jellyfin-image-cache/' in `user-emacs-directory')."
           (puthash 'music-placeholder image jellyfin--preview-image-cache))
         image)))
 
+(defun jellyfin--poster-placeholder-image ()
+  "Return a generated SVG placeholder for poster images (seasons, shows)."
+  (or (gethash 'poster-placeholder jellyfin--preview-image-cache)
+      (let* ((svg "<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 300 450\">
+  <rect width=\"300\" height=\"450\" rx=\"8\" fill=\"#1c2a3a\"/>
+  <g transform=\"translate(100,160)\" fill=\"#4a6a8a\">
+    <rect x=\"0\" y=\"0\" width=\"100\" height=\"80\" rx=\"6\"/>
+    <rect x=\"10\" y=\"10\" width=\"80\" height=\"50\" rx=\"2\" fill=\"#1c2a3a\"/>
+    <polygon points=\"40,25 40,50 60,37.5\" fill=\"#4a6a8a\"/>
+    <circle cx=\"20\" cy=\"75\" r=\"8\"/>
+    <circle cx=\"80\" cy=\"75\" r=\"8\"/>
+    <rect x=\"0\" y=\"85\" width=\"100\" height=\"6\" rx=\"3\"/>
+    <rect x=\"15\" y=\"97\" width=\"70\" height=\"6\" rx=\"3\"/>
+  </g>
+</svg>")
+             (image (create-image svg 'svg t :width 300)))
+        (when image
+          (puthash 'poster-placeholder image jellyfin--preview-image-cache))
+        image)))
+
 ;;; --- Playback reporting ---
 
 (defun jellyfin--report-playing (item-id &optional position-secs)
@@ -929,14 +950,13 @@ Re-renders automatically when the window is resized."
               (when (> idx 0)
                 (insert (propertize " " 'display
                                     `(space :align-to (,(* idx col-w))))))
-              (if image
-                  (insert-text-button "[poster]"
-                                      'display image
-                                      'action action
-                                      'follow-link t)
-                (insert-text-button "[no image]"
-                                    'action action
-                                    'follow-link t)))
+              (insert-text-button "[poster]"
+                                  'display (or image
+                                               (jellyfin--image-rescale
+                                                (jellyfin--poster-placeholder-image)
+                                                img-w))
+                                  'action action
+                                  'follow-link t))
             (setq idx (1+ idx))))
         (insert "\n")
         ;; Title row
@@ -972,22 +992,13 @@ Shows series info as header, season list below."
   (let* ((series-id (alist-get 'Id series-item))
          (series-name (alist-get 'Name series-item))
          (seasons (jellyfin--get-seasons series-id)))
-    (jellyfin--show-preview-render-items
+    (jellyfin--show-dired-render-grid
      (append seasons nil)
      (lambda (item)
        (lambda (_btn)
          (jellyfin--show-preview-episodes series-item item)))
      (lambda (item)
-       (alist-get 'Name item))
-     (lambda ()
-       (when (display-graphic-p)
-         (when-let ((image (jellyfin--fetch-image series-id)))
-           (insert-image image "[poster]")
-           (insert "\n")))
-       (insert (propertize series-name 'face 'bold) "\n")
-       (let ((overview (or (alist-get 'Overview series-item) "")))
-         (unless (string-empty-p overview)
-           (insert overview "\n")))))))
+       (alist-get 'Name item)))))
 
 (defun jellyfin--show-preview-episodes (series-item season-item)
   "Fetch and render episodes for SERIES-ITEM / SEASON-ITEM.
