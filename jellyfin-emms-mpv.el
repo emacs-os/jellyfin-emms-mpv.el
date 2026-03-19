@@ -782,14 +782,16 @@ Cleans up any existing session first."
                    (overview (or (alist-get 'Overview item) "")))
               ;; Poster image (GUI only)
               (when (display-graphic-p)
-                (when-let ((image (or (jellyfin--fetch-image image-id)
-                                      (jellyfin--fetch-image id))))
-                  (insert-text-button "[poster]"
-                                      'display image
-                                      'action (lambda (_btn)
-                                                (jellyfin--preview-select name))
-                                      'follow-link t)
-                  (insert "\n")))
+                (let ((image (or (jellyfin--fetch-image image-id)
+                                 (jellyfin--fetch-image id)
+                                 (jellyfin--music-placeholder-image))))
+                  (when image
+                    (insert-text-button "[poster]"
+                                        'display image
+                                        'action (lambda (_btn)
+                                                  (jellyfin--preview-select name))
+                                        'follow-link t)
+                    (insert "\n"))))
               ;; Clickable title
               (insert-text-button name
                                   'action (lambda (_btn)
@@ -1206,23 +1208,49 @@ Also clears cached poster images for movies so they are re-fetched."
 
 ;;;###autoload
 (defun jellyfin-browse-albums ()
-  "Pick artist -> album -> queue all tracks to EMMS playlist."
+  "Pick artist -> album -> queue all tracks to EMMS playlist.
+When `jellyfin-completing-read-preview' is non-nil, shows a preview
+buffer with images and descriptions that narrows as you type."
   (interactive)
   (jellyfin--ensure-auth)
   (let* (;; Pick artist
          (artists (jellyfin--retry-if-empty #'jellyfin--get-artists))
          (artist-names (mapcar (lambda (a) (cons (alist-get 'Name a) a))
                                artists))
-         (artist-choice (completing-read "Artist: "
-                                         (mapcar #'car artist-names) nil t))
+         (artist-choice
+          (if jellyfin-completing-read-preview
+              (progn
+                (setq jellyfin--preview-data artist-names)
+                (minibuffer-with-setup-hook
+                    (lambda ()
+                      (add-hook 'post-command-hook
+                                #'jellyfin--preview-update nil t)
+                      (add-hook 'minibuffer-exit-hook
+                                #'jellyfin--preview-cleanup nil t))
+                  (completing-read "Artist: "
+                                   (mapcar #'car artist-names) nil t)))
+            (completing-read "Artist: "
+                             (mapcar #'car artist-names) nil t)))
          (artist (cdr (assoc artist-choice artist-names)))
          (artist-id (alist-get 'Id artist))
          ;; Pick album
          (albums (jellyfin--get-albums-by-artist artist-id))
          (album-names (mapcar (lambda (a) (cons (alist-get 'Name a) a))
                               albums))
-         (album-choice (completing-read "Album: "
-                                        (mapcar #'car album-names) nil t))
+         (album-choice
+          (if jellyfin-completing-read-preview
+              (progn
+                (setq jellyfin--preview-data album-names)
+                (minibuffer-with-setup-hook
+                    (lambda ()
+                      (add-hook 'post-command-hook
+                                #'jellyfin--preview-update nil t)
+                      (add-hook 'minibuffer-exit-hook
+                                #'jellyfin--preview-cleanup nil t))
+                  (completing-read "Album: "
+                                   (mapcar #'car album-names) nil t)))
+            (completing-read "Album: "
+                             (mapcar #'car album-names) nil t)))
          (album (cdr (assoc album-choice album-names)))
          (album-id (alist-get 'Id album))
          ;; Get tracks
@@ -1237,14 +1265,28 @@ Also clears cached poster images for movies so they are re-fetched."
 
 ;;;###autoload
 (defun jellyfin-browse-playlists ()
-  "Pick a playlist -> queue all tracks to EMMS playlist."
+  "Pick a playlist -> queue all tracks to EMMS playlist.
+When `jellyfin-completing-read-preview' is non-nil, shows a preview
+buffer with images and descriptions that narrows as you type."
   (interactive)
   (jellyfin--ensure-auth)
   (let* ((playlists (jellyfin--retry-if-empty #'jellyfin--get-playlists))
          (playlist-names (mapcar (lambda (p) (cons (alist-get 'Name p) p))
                                  playlists))
-         (choice (completing-read "Playlist: "
-                                  (mapcar #'car playlist-names) nil t))
+         (choice
+          (if jellyfin-completing-read-preview
+              (progn
+                (setq jellyfin--preview-data playlist-names)
+                (minibuffer-with-setup-hook
+                    (lambda ()
+                      (add-hook 'post-command-hook
+                                #'jellyfin--preview-update nil t)
+                      (add-hook 'minibuffer-exit-hook
+                                #'jellyfin--preview-cleanup nil t))
+                  (completing-read "Playlist: "
+                                   (mapcar #'car playlist-names) nil t)))
+            (completing-read "Playlist: "
+                             (mapcar #'car playlist-names) nil t)))
          (playlist (cdr (assoc choice playlist-names)))
          (playlist-id (alist-get 'Id playlist))
          (tracks (jellyfin--get-playlist-items playlist-id)))
