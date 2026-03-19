@@ -724,11 +724,24 @@ Cleans up any existing session first."
 (defvar jellyfin--preview-timer nil
   "Idle timer used to debounce preview updates.")
 
+(defvar-local jellyfin--parent-buffer nil
+  "Buffer to return to when navigating up from a drill-down buffer.")
+
+(defun jellyfin--browse-up ()
+  "Kill current buffer and switch to parent buffer, if alive."
+  (interactive)
+  (let ((parent jellyfin--parent-buffer))
+    (kill-buffer (current-buffer))
+    (when (and parent (buffer-live-p parent))
+      (switch-to-buffer parent))))
+
 (defvar jellyfin--preview-mode-map
   (let ((map (make-sparse-keymap)))
     (set-keymap-parent map special-mode-map)
     (define-key map [wheel-up] (lambda () (interactive) (scroll-down 1)))
     (define-key map [wheel-down] (lambda () (interactive) (scroll-up 1)))
+    (define-key map (kbd "q") #'jellyfin--browse-up)
+    (define-key map (kbd "^") #'jellyfin--browse-up)
     map)
   "Keymap for the Jellyfin preview buffer.")
 
@@ -857,17 +870,14 @@ Uses `completion-all-completions' to respect the user's completion styles."
 
 ;;; --- Show preview drill-down ---
 
-(defvar jellyfin--show-preview-result nil
-  "Stores the selected result during show preview drill-down.
-Set by episode button, read after `recursive-edit' returns.")
-
 (defun jellyfin--show-preview-render-items (items make-action make-label
-                                                  &optional header)
-  "Render ITEMS into the *Jellyfin* buffer for show drill-down.
+                                                  &optional header buffer-name)
+  "Render ITEMS into a Jellyfin buffer for show drill-down.
 MAKE-ACTION is called with an item and returns a button action function.
 MAKE-LABEL is called with an item and returns its display label string.
-HEADER, if non-nil, is a function called to insert header content at top."
-  (let ((buf (get-buffer-create "*Jellyfin*")))
+HEADER, if non-nil, is a function called to insert header content at top.
+BUFFER-NAME defaults to \"*Jellyfin*\"."
+  (let ((buf (get-buffer-create (or buffer-name "*Jellyfin*"))))
     (with-current-buffer buf
       (let ((inhibit-read-only t))
         (erase-buffer)
@@ -909,28 +919,33 @@ Returns nil if IMAGE is nil."
 A plist (:items ITEMS :make-action FN :make-label FN) or nil.")
 
 (defun jellyfin--grid-resize-handler (_frame)
-  "Re-render the grid when the window showing *Jellyfin* is resized."
-  (when-let ((buf (get-buffer "*Jellyfin*")))
-    (when (buffer-local-value 'jellyfin--grid-state buf)
+  "Re-render grids in all live Jellyfin buffers that have grid state."
+  (dolist (buf (buffer-list))
+    (when (and (buffer-live-p buf)
+               (buffer-local-value 'jellyfin--grid-state buf))
       (when-let ((win (get-buffer-window buf t)))
         (with-selected-window win
           (let ((state (buffer-local-value 'jellyfin--grid-state buf)))
             (jellyfin--show-dired-render-grid
              (plist-get state :items)
              (plist-get state :make-action)
-             (plist-get state :make-label))))))))
+             (plist-get state :make-label)
+             (plist-get state :buffer-name))))))))
 
-(defun jellyfin--show-dired-render-grid (items make-action make-label)
-  "Render ITEMS as a responsive grid of posters and titles in *Jellyfin*.
+(defun jellyfin--show-dired-render-grid (items make-action make-label
+                                               &optional buffer-name)
+  "Render ITEMS as a responsive grid of posters and titles.
 Column count adapts to window width; images stay 200px with even spacing.
-Re-renders automatically when the window is resized."
-  (let* ((buf (get-buffer-create "*Jellyfin*"))
+Re-renders automatically when the window is resized.
+BUFFER-NAME defaults to \"*Jellyfin*\"."
+  (let* ((buf (get-buffer-create (or buffer-name "*Jellyfin*")))
          (img-w 200)
          (min-gap 20))
     (switch-to-buffer buf)
     (with-current-buffer buf
       (setq jellyfin--grid-state
-            (list :items items :make-action make-action :make-label make-label))
+            (list :items items :make-action make-action :make-label make-label
+                  :buffer-name (or buffer-name "*Jellyfin*")))
       (add-hook 'window-size-change-functions #'jellyfin--grid-resize-handler))
     (let* ((win-w (window-body-width nil t))
            (cols (max 1 (/ win-w (+ img-w min-gap))))
@@ -975,22 +990,10 @@ Re-renders automatically when the window is resized."
         (insert "\n\n"))
       (goto-char (point-min)))))
 
-(defun jellyfin--show-preview-series (series-alist)
-  "Render SERIES-ALIST in the *Jellyfin* buffer.
-Each entry is (NAME . item).  Clicking a series drills into seasons."
-  (jellyfin--show-preview-render-items
-   (mapcar #'cdr series-alist)
-   (lambda (item)
-     (lambda (_btn)
-       (jellyfin--show-preview-season item)))
-   (lambda (item)
-     (alist-get 'Name item))))
-
 (defun jellyfin--show-preview-season (series-item)
-  "Fetch and render seasons for SERIES-ITEM.
-Shows series info as header, season list below."
-  (let* ((series-id (alist-get 'Id series-item))
-         (series-name (alist-get 'Name series-item))
+  "Fetch and render seasons for SERIES-ITEM in *Jellyfin Seasons*."
+  (let* ((parent (current-buffer))
+         (series-id (alist-get 'Id series-item))
          (seasons (jellyfin--get-seasons series-id)))
     (jellyfin--show-dired-render-grid
      (append seasons nil)
@@ -998,13 +1001,15 @@ Shows series info as header, season list below."
        (lambda (_btn)
          (jellyfin--show-preview-episodes series-item item)))
      (lambda (item)
-       (alist-get 'Name item)))))
+       (alist-get 'Name item))
+     "*Jellyfin Seasons*")
+    (setq jellyfin--parent-buffer parent)))
 
 (defun jellyfin--show-preview-episodes (series-item season-item)
-  "Fetch and render episodes for SERIES-ITEM / SEASON-ITEM.
-Shows series+season header, episode list below.
-Clicking an episode stores the result and exits recursive-edit."
-  (let* ((series-id (alist-get 'Id series-item))
+  "Fetch and render episodes for SERIES-ITEM / SEASON-ITEM in *Jellyfin Episodes*.
+Clicking an episode plays it directly in mpv."
+  (let* ((parent (current-buffer))
+         (series-id (alist-get 'Id series-item))
          (series-name (alist-get 'Name series-item))
          (season-id (alist-get 'Id season-item))
          (season-name (alist-get 'Name season-item))
@@ -1013,10 +1018,24 @@ Clicking an episode stores the result and exits recursive-edit."
     (jellyfin--show-preview-render-items
      (append episodes nil)
      (lambda (item)
-       (lambda (_btn)
-         (setq jellyfin--show-preview-result
-               (list series-id season-item item episodes))
-         (exit-recursive-edit)))
+       (let ((eps episodes))
+         (lambda (_btn)
+           (let* ((chosen-id (alist-get 'Id item))
+                  (found nil)
+                  (urls nil)
+                  (ep-ids nil))
+             (seq-doseq (ep eps)
+               (when (or found (equal (alist-get 'Id ep) chosen-id))
+                 (setq found t)
+                 (push (jellyfin--stream-url (alist-get 'Id ep) "Videos") urls)
+                 (push (alist-get 'Id ep) ep-ids)))
+             (setq urls (nreverse urls)
+                   ep-ids (nreverse ep-ids))
+             (jellyfin--mpv-play urls (apply #'vector ep-ids))
+             (message "Playing %s — %s + %d more"
+                      series-name
+                      (alist-get 'Name item)
+                      (1- (length urls)))))))
      (lambda (item)
        (format "S%02dE%02d — %s"
                (or season-num 0)
@@ -1028,21 +1047,9 @@ Clicking an episode stores the result and exits recursive-edit."
          (when-let ((image (jellyfin--fetch-image season-id)))
            (insert-image image "[poster]")
            (insert "\n")))
-       (insert (propertize season-name 'face 'bold) "\n")))))
-
-(defun jellyfin--show-preview-pick-episode (series-item)
-  "Show drill-down buffer for SERIES-ITEM seasons and episodes.
-Uses `recursive-edit' to wait for selection.
-Returns (SERIES-ID SEASON-ITEM CHOSEN-EP EPISODES) or nil if aborted."
-  (setq jellyfin--show-preview-result nil)
-  (jellyfin--show-preview-season series-item)
-  (condition-case nil
-      (progn
-        (recursive-edit)
-        jellyfin--show-preview-result)
-    (quit
-     (jellyfin--preview-cleanup)
-     nil)))
+       (insert (propertize season-name 'face 'bold) "\n"))
+     "*Jellyfin Episodes*")
+    (setq jellyfin--parent-buffer parent)))
 
 ;;; --- Playlist cover art ---
 
@@ -1160,11 +1167,11 @@ Uses cached metadata when available; run
        (lambda (_btn)
          (let* ((id (alist-get 'Id item))
                 (url (jellyfin--stream-url id "Videos")))
-           (jellyfin--preview-cleanup)
            (jellyfin--mpv-play (list url) (vector id))
            (message "Playing movie: %s" (alist-get 'Name item)))))
      (lambda (item)
-       (alist-get 'Name item)))))
+       (alist-get 'Name item))
+     "*Jellyfin Movies*")))
 
 ;;;###autoload
 (defun jellyfin-browse-movies-gallery-refetch-metadata ()
@@ -1281,14 +1288,8 @@ preview; seasons and episodes use clickable drill-down in the buffer."
           series-id (alist-get 'Id series-item))
     ;; Step 2: Pick season + episode
     (if jellyfin-preview
-        (let ((result (jellyfin--show-preview-pick-episode series-item)))
-          (unless result
-            (user-error "Aborted"))
-          (setq series-id (nth 0 result)
-                season-item (nth 1 result)
-                chosen-ep (nth 2 result)
-                episodes (nth 3 result))
-          (jellyfin--preview-cleanup))
+        ;; Drill-down buffers handle playback directly
+        (jellyfin--show-preview-season series-item)
       ;; Non-preview: completing-read for season and episode
       (let* ((seasons (jellyfin--get-seasons series-id))
              (season-alist (mapcar (lambda (s) (cons (alist-get 'Name s) s))
@@ -1315,24 +1316,24 @@ preview; seasons and episodes use clickable drill-down in the buffer."
                                                 action (mapcar #'car episode-alist)
                                                 str pred)))
                                            nil t)))
-          (setq chosen-ep (cdr (assoc ep-choice episode-alist))))))
-    ;; Step 3: Play from chosen episode onward
-    (let ((chosen-id (alist-get 'Id chosen-ep))
-          (found nil)
-          (urls nil)
-          (ep-ids nil))
-      (seq-doseq (ep episodes)
-        (when (or found (equal (alist-get 'Id ep) chosen-id))
-          (setq found t)
-          (push (jellyfin--stream-url (alist-get 'Id ep) "Videos") urls)
-          (push (alist-get 'Id ep) ep-ids)))
-      (setq urls (nreverse urls)
-            ep-ids (nreverse ep-ids))
-      (jellyfin--mpv-play urls (apply #'vector ep-ids))
-      (message "Playing %s — %s + %d more"
-               series-choice
-               (alist-get 'Name chosen-ep)
-               (1- (length urls))))))
+          (setq chosen-ep (cdr (assoc ep-choice episode-alist))))
+        ;; Play from chosen episode onward
+        (let ((chosen-id (alist-get 'Id chosen-ep))
+              (found nil)
+              (urls nil)
+              (ep-ids nil))
+          (seq-doseq (ep episodes)
+            (when (or found (equal (alist-get 'Id ep) chosen-id))
+              (setq found t)
+              (push (jellyfin--stream-url (alist-get 'Id ep) "Videos") urls)
+              (push (alist-get 'Id ep) ep-ids)))
+          (setq urls (nreverse urls)
+                ep-ids (nreverse ep-ids))
+          (jellyfin--mpv-play urls (apply #'vector ep-ids))
+          (message "Playing %s — %s + %d more"
+                   series-choice
+                   (alist-get 'Name chosen-ep)
+                   (1- (length urls))))))))
 
 (defvar jellyfin--shows-gallery-cache nil
   "Cached list of series items from the Jellyfin server.")
@@ -1372,44 +1373,14 @@ Uses cached metadata when available; run
     (jellyfin-browse-shows-gallery-refetch-metadata))
   (if (zerop (length jellyfin--shows-gallery-cache))
       (message "No shows found on server.")
-    (let ((series-alist (mapcar (lambda (s) (cons (alist-get 'Name s) s))
-                                jellyfin--shows-gallery-cache)))
-      (setq jellyfin--show-preview-result nil)
-      (jellyfin--show-dired-render-grid
-       (mapcar #'cdr series-alist)
-       (lambda (item)
-         (lambda (_btn)
-           (jellyfin--show-preview-season item)))
-       (lambda (item)
-         (alist-get 'Name item)))
-      (condition-case nil
-          (progn
-            (recursive-edit)
-            (let ((result jellyfin--show-preview-result))
-              (jellyfin--preview-cleanup)
-              (unless result
-                (user-error "Aborted"))
-              (let* ((series-id (nth 0 result))
-                     (chosen-ep (nth 2 result))
-                     (episodes (nth 3 result))
-                     (chosen-id (alist-get 'Id chosen-ep))
-                     (found nil)
-                     (urls nil)
-                     (ep-ids nil))
-                (seq-doseq (ep episodes)
-                  (when (or found (equal (alist-get 'Id ep) chosen-id))
-                    (setq found t)
-                    (push (jellyfin--stream-url (alist-get 'Id ep) "Videos") urls)
-                    (push (alist-get 'Id ep) ep-ids)))
-                (setq urls (nreverse urls)
-                      ep-ids (nreverse ep-ids))
-                (jellyfin--mpv-play urls (apply #'vector ep-ids))
-                (message "Playing %s + %d more"
-                         (alist-get 'Name chosen-ep)
-                         (1- (length urls))))))
-        (quit
-         (jellyfin--preview-cleanup)
-         nil)))))
+    (jellyfin--show-dired-render-grid
+     (append jellyfin--shows-gallery-cache nil)
+     (lambda (item)
+       (lambda (_btn)
+         (jellyfin--show-preview-season item)))
+     (lambda (item)
+       (alist-get 'Name item))
+     "*Jellyfin Shows*")))
 
 ;;;###autoload
 (defun jellyfin-browse-shows-gallery-refetch-metadata ()
