@@ -1639,7 +1639,7 @@ Populated by `jellyfin-browse-songs-refetch-metadata'.")
     (define-key map (kbd "RET") #'jellyfin--cherry-picker-execute)
     (define-key map (kbd "q") #'jellyfin--cherry-picker-quit)
     (when (display-graphic-p)
-      (define-key map (kbd "?") #'jellyfin--cherry-picker-song-info))
+      (define-key map (kbd "!") #'jellyfin--cherry-picker-song-info))
     map)
   "Keymap for the Jellyfin cherry picker buffer.")
 

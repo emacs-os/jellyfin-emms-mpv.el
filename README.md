@@ -95,7 +95,7 @@ sudo dnf install mpv
 
 ### EMMS
 
-Example config used during development:
+Example config used during development. Press `!` on a song in the EMMS playlist to open an overview showing artist name, album, song title, duration, artist metadata, and the rest of the artist's discography (GUI Emacs only).
 
 <table><tr>
 <td>
