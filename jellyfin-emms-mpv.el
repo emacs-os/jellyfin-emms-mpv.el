@@ -31,7 +31,7 @@
 ;;   - mpv
 ;;
 ;; Usage:
-;;   (setq jellyfin-preview t)               — enable poster/description preview
+;;   (setq jellyfin-completing-read-preview t) — enable poster/description preview
 ;;   M-x jellyfin-browse-movies             — pick a movie, open mpv
 ;;   M-x jellyfin-browse-movies-gallery     — visual movie browser with poster grid (GUI only)
 ;;   M-x jellyfin-browse-shows              — series -> season -> pick episode, mpv plays through
@@ -98,9 +98,14 @@
   "Base URL of the Jellyfin server (e.g. \"https://host.example.com\")."
   :type 'string)
 
-(defcustom jellyfin-preview nil
+(define-obsolete-variable-alias 'jellyfin-preview
+  'jellyfin-completing-read-preview "0.2.0")
+
+(defcustom jellyfin-completing-read-preview nil
   "When non-nil, show a preview buffer with posters and descriptions
-while browsing movies and shows."
+during minibuffer completion in `jellyfin-browse-movies',
+`jellyfin-browse-shows', and `jellyfin-browse-continue-watching'.
+Has no effect on gallery commands."
   :type 'boolean)
 
 (defcustom jellyfin-preferred-language nil
@@ -1056,8 +1061,8 @@ Clicking an episode plays it directly in mpv."
 (defun jellyfin--playlist-insert-cover (item-id &optional fallback-id)
   "Insert or replace cover image at top of EMMS playlist buffer.
 Tries ITEM-ID first, then FALLBACK-ID, then the server splash screen.
-Requires `jellyfin-preview' and GUI Emacs."
-  (when (and jellyfin-preview (display-graphic-p))
+Requires GUI Emacs."
+  (when (display-graphic-p)
     (let ((image (or (and item-id (jellyfin--fetch-image item-id))
                      (and fallback-id (jellyfin--fetch-image fallback-id))
                      (jellyfin--music-placeholder-image))))
@@ -1086,7 +1091,7 @@ Requires `jellyfin-preview' and GUI Emacs."
 (defun jellyfin--playlist-track-started ()
   "Update playlist cover art when a new track starts playing.
 Tries album cover first, falls back to artist image."
-  (when (and jellyfin-preview (display-graphic-p))
+  (when (display-graphic-p)
     (when-let ((track (emms-playlist-current-selected-track)))
       (jellyfin--playlist-insert-cover
        (emms-track-get track 'jellyfin-cover-id)
@@ -1105,7 +1110,7 @@ Shows a preview buffer with posters and descriptions as you type."
          (names (mapcar (lambda (item)
                           (cons (alist-get 'Name item) item))
                         items)))
-    (let ((choice (if jellyfin-preview
+    (let ((choice (if jellyfin-completing-read-preview
                       (progn
                         (setq jellyfin--preview-data names)
                         (minibuffer-with-setup-hook
@@ -1256,7 +1261,7 @@ Also clears cached poster images for movies so they are re-fetched."
 ;;;###autoload
 (defun jellyfin-browse-shows ()
   "Browse TV shows: Series -> Season -> Episode, then play in mpv.
-When `jellyfin-preview' is non-nil, shows a preview buffer with
+When `jellyfin-completing-read-preview' is non-nil, shows a preview buffer with
 images and descriptions that narrows as you type, like
 `jellyfin-browse-movies'.  All three steps use completing-read."
   (interactive)
@@ -1267,7 +1272,7 @@ images and descriptions that narrows as you type, like
                                series))
          ;; Step 1: Pick series
          (series-choice
-          (if jellyfin-preview
+          (if jellyfin-completing-read-preview
               (progn
                 (setq jellyfin--preview-data series-alist)
                 (minibuffer-with-setup-hook
@@ -1287,7 +1292,7 @@ images and descriptions that narrows as you type, like
          (season-alist (mapcar (lambda (s) (cons (alist-get 'Name s) s))
                                seasons))
          (season-choice
-          (if jellyfin-preview
+          (if jellyfin-completing-read-preview
               (progn
                 (setq jellyfin--preview-data season-alist)
                 (minibuffer-with-setup-hook
@@ -1320,7 +1325,7 @@ images and descriptions that narrows as you type, like
                         action (mapcar #'car episode-alist)
                         str pred))))
          (ep-choice
-          (if jellyfin-preview
+          (if jellyfin-completing-read-preview
               (progn
                 (setq jellyfin--preview-data episode-alist)
                 (minibuffer-with-setup-hook
@@ -1454,7 +1459,7 @@ Also clears cached poster images for shows so they are re-fetched."
                       (cons label item)))
                   items))
          (cands (mapcar #'car labels))
-         (choice (if jellyfin-preview
+         (choice (if jellyfin-completing-read-preview
                      (progn
                        (setq jellyfin--preview-data labels)
                        (minibuffer-with-setup-hook

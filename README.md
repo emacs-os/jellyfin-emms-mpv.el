@@ -28,13 +28,13 @@ Browse and play music/video from a Jellyfin server via EMMS + mpv. Tracks playba
 | `M-x jellyfin-browse-movies` | Pick a movie by typing in minibuffer, play in mpv |
 | `M-x jellyfin-browse-movies-gallery` | Poster grid (GUI only), point and click or cursor and RET |
 | `M-x jellyfin-browse-shows` | Series -> season -> episode by typing in minibuffer, plays through end of season |
-| `M-x jellyfin-browse-shows-gallery` | Poster grid drill-down (GUI only), point and click or cursor and RET |
+| `M-x jellyfin-browse-shows-gallery` | Poster grid drill-down (GUI only), `q`/`^` to go back |
 | `M-x jellyfin-browse-continue-watching` | Resume where you left off by typing in minibuffer |
 | `M-x jellyfin-browse-albums` | Artist -> album by typing in minibuffer, queue in EMMS |
 | `M-x jellyfin-browse-playlists` | Pick playlist by typing in minibuffer, queue in EMMS |
 | `M-x jellyfin-browse-songs` | Interactive dired-like buffer: `m` mark, `u` unmark, RET queue |
 
-With `jellyfin-preview` enabled, minibuffer commands show poster previews as you type. Gallery commands cache metadata and images to disk on first run - use the corresponding `*-refetch-metadata` command after changing media on the server.
+With `jellyfin-completing-read-preview` enabled, minibuffer commands show poster previews as you type. Gallery commands always show posters (GUI only) and cache metadata and images to disk on first run - use the corresponding `*-refetch-metadata` command after changing media on the server.
 
 ## Installation
 
@@ -62,7 +62,7 @@ machine your-server.example.com port 8096 login USERNAME password PASSWORD
   :config
   (setq jellyfin-server-url
         "https://your-server.example.com"
-        jellyfin-preview t
+        jellyfin-completing-read-preview t
         jellyfin-preferred-language "eng"
         jellyfin-subtitles t))
 ```
@@ -79,7 +79,7 @@ machine your-server.example.com port 8096 login USERNAME password PASSWORD
   :config
   (setq jellyfin-server-url
         "https://your-server.example.com"
-        jellyfin-preview t
+        jellyfin-completing-read-preview t
         jellyfin-preferred-language "eng"
         jellyfin-subtitles t))
 ```
@@ -148,7 +148,7 @@ Example config used during development:
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
 | `jellyfin-server-url` | `string` | `nil` | Jellyfin server URL (e.g. `"https://host.example.com"`) |
-| `jellyfin-preview` | `boolean` | `nil` | `t` to show poster previews while browsing (GUI Emacs only) |
+| `jellyfin-completing-read-preview` | `boolean` | `nil` | `t` to show poster previews during minibuffer completion (GUI Emacs only). `jellyfin-preview` is a deprecated alias |
 | `jellyfin-preferred-language` | `string` or `nil` | `nil` | ISO 639-2 three-letter audio language code: `"eng"`, `"fre"`, `"jpn"`, etc. Passed as `--alang` to mpv |
 | `jellyfin-subtitles` | `boolean` | `nil` | `t` to show subtitles matching `jellyfin-preferred-language` (`--slang`). Requires `jellyfin-preferred-language` to be set |
 | `jellyfin-elcava-emms-experimental` | `boolean` | `nil` | `t` to show an embedded spectrum visualizer in the EMMS playlist. Requires [elcava](https://github.com/emacs-os/elcava) + `parec`. Linux only |
