@@ -479,6 +479,53 @@ on disk (`jellyfin-image-cache/' in `user-emacs-directory')."
                     (delete-file tmp-file))))
             (error nil))))))
 
+(defun jellyfin--fetch-image-type (item-id image-type &optional max-width)
+  "Fetch IMAGE-TYPE image for ITEM-ID, returning an image descriptor or nil.
+IMAGE-TYPE is e.g. \"Primary\", \"Backdrop\".  MAX-WIDTH defaults to 300.
+Results are cached in memory and on disk."
+  (let* ((width (or max-width 300))
+         (cache-key (format "%s-%s" item-id image-type)))
+    (or (gethash cache-key jellyfin--preview-image-cache)
+        (let ((disk-file (expand-file-name cache-key (jellyfin--image-cache-dir))))
+          (if (and (file-exists-p disk-file)
+                   (> (file-attribute-size (file-attributes disk-file)) 0))
+              (condition-case nil
+                  (let* ((data (with-temp-buffer
+                                 (set-buffer-multibyte nil)
+                                 (insert-file-contents-literally disk-file)
+                                 (buffer-string)))
+                         (image (create-image data nil t :width width)))
+                    (when image
+                      (puthash cache-key image jellyfin--preview-image-cache)
+                      image))
+                (error nil))
+            (condition-case nil
+                (let* ((url-show-status nil)
+                       (url-request-noninteractive t)
+                       (_auth (jellyfin--ensure-auth))
+                       (img-url (format "%s/Items/%s/Images/%s?maxWidth=%d&api_key=%s"
+                                        jellyfin-server-url item-id image-type
+                                        width jellyfin--token))
+                       (tmp-file (make-temp-file "jellyfin-img-")))
+                  (let ((inhibit-message t))
+                    (url-copy-file img-url tmp-file t))
+                  (unwind-protect
+                      (when (and (file-exists-p tmp-file)
+                                 (> (file-attribute-size (file-attributes tmp-file)) 0))
+                        (let ((inhibit-message t))
+                          (copy-file tmp-file disk-file t))
+                        (let* ((data (with-temp-buffer
+                                       (set-buffer-multibyte nil)
+                                       (insert-file-contents-literally tmp-file)
+                                       (buffer-string)))
+                               (image (create-image data nil t :width width)))
+                          (when image
+                            (puthash cache-key image jellyfin--preview-image-cache)
+                            image)))
+                    (when (file-exists-p tmp-file)
+                      (delete-file tmp-file))))
+              (error nil)))))))
+
 (defun jellyfin--music-placeholder-image ()
   "Return a generated SVG music note image as a fallback placeholder."
   (or (gethash 'music-placeholder jellyfin--preview-image-cache)
@@ -1589,6 +1636,8 @@ Populated by `jellyfin-browse-songs-refetch-metadata'.")
     (define-key map (kbd "M") #'jellyfin--cherry-picker-mark-all)
     (define-key map (kbd "RET") #'jellyfin--cherry-picker-execute)
     (define-key map (kbd "q") #'jellyfin--cherry-picker-quit)
+    (when (display-graphic-p)
+      (define-key map (kbd "?") #'jellyfin--cherry-picker-song-info))
     map)
   "Keymap for the Jellyfin cherry picker buffer.")
 
@@ -1599,7 +1648,10 @@ Populated by `jellyfin-browse-songs-refetch-metadata'.")
   (setq mode-name "Jellyfin Songs"
         header-line-format
         (substitute-command-keys
-         " \\<jellyfin--cherry-picker-mode-map>\\[jellyfin--cherry-picker-mark] mark  \\[jellyfin--cherry-picker-unmark] unmark  \\[jellyfin--cherry-picker-mark-all] mark all  \\[jellyfin--cherry-picker-unmark-all] unmark all  \\[jellyfin--cherry-picker-execute] queue  \\[jellyfin--cherry-picker-quit] quit")))
+         (concat " \\<jellyfin--cherry-picker-mode-map>\\[jellyfin--cherry-picker-mark] mark  \\[jellyfin--cherry-picker-unmark] unmark  \\[jellyfin--cherry-picker-mark-all] mark all  \\[jellyfin--cherry-picker-unmark-all] unmark all  \\[jellyfin--cherry-picker-execute] queue"
+                 (when (display-graphic-p)
+                   "  \\[jellyfin--cherry-picker-song-info] info")
+                 "  \\[jellyfin--cherry-picker-quit] quit"))))
 
 (defun jellyfin--cherry-picker-render (songs)
   "Render SONGS into the *Jellyfin Songs* buffer."
@@ -1731,6 +1783,181 @@ Uses cached metadata when available; run
   (jellyfin--songs-cache-save)
   (jellyfin--item-cache-populate jellyfin--songs-cache)
   (message "Cached %d songs." (length jellyfin--songs-cache)))
+
+;;; --- Song Info popup ---
+
+(defun jellyfin--format-ticks (ticks)
+  "Format Jellyfin RunTimeTicks (100ns units) as \"M:SS\" or \"H:MM:SS\"."
+  (let* ((total-secs (/ (or ticks 0) 10000000))
+         (hours (/ total-secs 3600))
+         (mins (/ (mod total-secs 3600) 60))
+         (secs (mod total-secs 60)))
+    (if (> hours 0)
+        (format "%d:%02d:%02d" hours mins secs)
+      (format "%d:%02d" mins secs))))
+
+(defvar jellyfin--song-info-mode-map
+  (let ((map (make-keymap)))
+    (suppress-keymap map t)
+    (define-key map (kbd "q") #'jellyfin--song-info-quit)
+    (define-key map [wheel-up] (lambda () (interactive) (scroll-down 3)))
+    (define-key map [wheel-down] (lambda () (interactive) (scroll-up 3)))
+    map)
+  "Keymap for the Jellyfin song info buffer.
+Only `q' and mouse scrolling are active; all other keys are suppressed.")
+
+(defun jellyfin--song-info-mode ()
+  "Set up the current buffer as a Jellyfin song info buffer."
+  (special-mode)
+  (use-local-map jellyfin--song-info-mode-map)
+  (setq mode-name "Jellyfin Song Info"
+        cursor-type nil
+        truncate-lines nil
+        word-wrap t))
+
+(defun jellyfin--song-info-quit ()
+  "Kill the song info buffer and return to the cherry picker."
+  (interactive)
+  (let ((parent jellyfin--parent-buffer))
+    (kill-buffer (current-buffer))
+    (when (and parent (buffer-live-p parent))
+      (switch-to-buffer parent))))
+
+(defun jellyfin--song-info-render (item)
+  "Render a detailed song info buffer for ITEM."
+  (let* ((parent (current-buffer))
+         (song-name (alist-get 'Name item))
+         (album-id (alist-get 'AlbumId item))
+         (artists (alist-get 'AlbumArtists item))
+         (artist-name (if (and artists (> (length artists) 0))
+                          (alist-get 'Name (aref artists 0))
+                        "Unknown Artist"))
+         (artist-id (and artists (> (length artists) 0)
+                         (alist-get 'Id (aref artists 0))))
+         (index (alist-get 'IndexNumber item))
+         (ticks (alist-get 'RunTimeTicks item))
+         (artist-data (when artist-id
+                        (condition-case nil
+                            (jellyfin--get-item-by-id artist-id)
+                          (error nil))))
+         (genres (when artist-data
+                   (alist-get 'Genres artist-data)))
+         (overview (when artist-data
+                     (alist-get 'Overview artist-data)))
+         (buf (get-buffer-create "*Jellyfin Song Info*")))
+    (with-current-buffer buf
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (jellyfin--song-info-mode)
+        ;; Artist backdrop
+        (when (and (display-graphic-p) artist-id)
+          (when-let ((backdrop (jellyfin--fetch-image-type
+                                artist-id "Backdrop" 600)))
+            (insert-image backdrop "[backdrop]")
+            (insert "\n\n")))
+        ;; Artist image + name + genres
+        (when (and (display-graphic-p) artist-id)
+          (when-let ((artist-img (jellyfin--fetch-image-type
+                                  artist-id "Primary" 150)))
+            (insert-image artist-img "[artist]")
+            (insert "\n")))
+        (insert (propertize artist-name
+                            'face '(:weight bold :height 1.4))
+                "\n")
+        (when (and genres (> (length genres) 0))
+          (insert (propertize (mapconcat #'identity (append genres nil) " / ")
+                              'face '(:foreground "gray60"))
+                  "\n"))
+        (insert "\n")
+        ;; Song title
+        (insert (propertize song-name
+                            'face '(:weight bold))
+                "\n")
+        ;; Track number + duration
+        (let ((parts nil))
+          (when index
+            (push (format "Track %d" index) parts))
+          (when ticks
+            (push (jellyfin--format-ticks ticks) parts))
+          (when parts
+            (insert (mapconcat #'identity (nreverse parts) "  |  ") "\n")))
+        ;; Discography (grid layout)
+        (when artist-id
+          (let ((disco-albums (condition-case nil
+                                  (jellyfin--get-albums-by-artist artist-id)
+                                (error nil))))
+            (when (and disco-albums (> (length disco-albums) 0))
+              (insert "\n"
+                      (propertize "Discography"
+                                  'face '(:weight bold :height 1.1))
+                      "\n\n")
+              (let* ((img-w 150)
+                     (min-gap 20)
+                     (win-w (window-body-width nil t))
+                     (cols (max 1 (/ win-w (+ img-w min-gap))))
+                     (col-w (/ win-w cols))
+                     (rows (seq-partition (append disco-albums nil) cols)))
+                (dolist (row rows)
+                  ;; Cover row
+                  (let ((idx 0))
+                    (dolist (alb row)
+                      (let* ((alb-id (alist-get 'Id alb))
+                             (img (or (and alb-id
+                                          (jellyfin--fetch-image-type
+                                           alb-id "Primary" img-w))
+                                      (jellyfin--image-rescale
+                                       (jellyfin--music-placeholder-image)
+                                       img-w))))
+                        (when (> idx 0)
+                          (insert (propertize
+                                   " " 'display
+                                   `(space :align-to (,(* idx col-w))))))
+                        (when img
+                          (insert-image img "[album]")))
+                      (setq idx (1+ idx))))
+                  (insert "\n")
+                  ;; Title row
+                  (let ((idx 0))
+                    (dolist (alb row)
+                      (let* ((alb-id (alist-get 'Id alb))
+                             (alb-name (or (alist-get 'Name alb)
+                                           "Unknown Album"))
+                             (alb-year (alist-get 'ProductionYear alb))
+                             (current-p (and album-id
+                                             (string= alb-id album-id))))
+                        (when (> idx 0)
+                          (insert (propertize
+                                   " " 'display
+                                   `(space :align-to (,(* idx col-w))))))
+                        (insert (propertize alb-name
+                                            'face '(:weight bold)))
+                        (when alb-year
+                          (insert (propertize (format "  (%d)" alb-year)
+                                              'face '(:foreground "gray60"))))
+                        (when current-p
+                          (insert (propertize
+                                   "  <--"
+                                   'face '(:foreground "gold"
+                                           :weight bold)))))
+                      (setq idx (1+ idx))))
+                  (insert "\n\n"))))))
+        ;; Artist bio
+        (when (and overview (not (string-empty-p overview)))
+          (insert "\n"
+                  (propertize "About the Artist"
+                              'face '(:weight bold :height 1.1))
+                  "\n"
+                  overview "\n"))
+        (goto-char (point-min))))
+    (switch-to-buffer buf)
+    (setq jellyfin--parent-buffer parent)))
+
+(defun jellyfin--cherry-picker-song-info ()
+  "Show detailed info for the song on the current line."
+  (interactive)
+  (if-let ((item (get-text-property (point) 'jellyfin-item)))
+      (jellyfin--song-info-render item)
+    (message "No song on this line.")))
 
 ;;; --- Embedded elcava visualizer ---
 ;;
