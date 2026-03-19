@@ -151,6 +151,7 @@ Example config used during development:
 | `jellyfin-completing-read-preview` | `boolean` | `nil` | `t` to show poster previews during minibuffer completion (GUI Emacs only). `jellyfin-preview` is a deprecated alias |
 | `jellyfin-preferred-language` | `string` or `nil` | `nil` | ISO 639-2 three-letter audio language code: `"eng"`, `"fre"`, `"jpn"`, etc. Passed as `--alang` to mpv |
 | `jellyfin-subtitles` | `boolean` | `nil` | `t` to show subtitles matching `jellyfin-preferred-language` (`--slang`). Requires `jellyfin-preferred-language` to be set |
+| `jellyfin-emms-cover-art` | `boolean` | `t` | `t` to show album cover art in the EMMS playlist buffer (GUI Emacs only) |
 | `jellyfin-elcava-emms-experimental` | `boolean` | `nil` | `t` to show an embedded spectrum visualizer in the EMMS playlist. Requires [elcava](https://github.com/emacs-os/elcava) + `parec`. Linux only |
 
 ## How it works

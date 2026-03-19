@@ -119,6 +119,11 @@ if available.  Uses ISO 639-2 three-letter codes as returned by Jellyfin."
 Requires `jellyfin-preferred-language' to be set."
   :type 'boolean)
 
+(defcustom jellyfin-emms-cover-art t
+  "When non-nil, show album cover art in the EMMS playlist buffer.
+Requires GUI Emacs."
+  :type 'boolean)
+
 (defcustom jellyfin-elcava-emms-experimental nil
   "When non-nil, show an embedded elcava spectrum visualizer in the playlist.
 Displays a small bar visualizer below the album cover art.
@@ -1058,13 +1063,12 @@ Clicking an episode plays it directly in mpv."
 
 ;;; --- Playlist cover art ---
 
-(defun jellyfin--playlist-insert-cover (item-id &optional fallback-id)
+(defun jellyfin--playlist-insert-cover (item-id)
   "Insert or replace cover image at top of EMMS playlist buffer.
-Tries ITEM-ID first, then FALLBACK-ID, then the server splash screen.
-Requires GUI Emacs."
-  (when (display-graphic-p)
+Tries ITEM-ID first, falls back to a generic placeholder.
+Requires `jellyfin-emms-cover-art' and GUI Emacs."
+  (when (and jellyfin-emms-cover-art (display-graphic-p))
     (let ((image (or (and item-id (jellyfin--fetch-image item-id))
-                     (and fallback-id (jellyfin--fetch-image fallback-id))
                      (jellyfin--music-placeholder-image))))
       (with-current-buffer emms-playlist-buffer
         (let ((inhibit-read-only t))
@@ -1089,13 +1093,11 @@ Requires GUI Emacs."
             (set-window-point win (point-min))))))))
 
 (defun jellyfin--playlist-track-started ()
-  "Update playlist cover art when a new track starts playing.
-Tries album cover first, falls back to artist image."
-  (when (display-graphic-p)
+  "Update playlist cover art when a new track starts playing."
+  (when (and jellyfin-emms-cover-art (display-graphic-p))
     (when-let ((track (emms-playlist-current-selected-track)))
       (jellyfin--playlist-insert-cover
-       (emms-track-get track 'jellyfin-cover-id)
-       (emms-track-get track 'jellyfin-artist-id)))))
+       (emms-track-get track 'jellyfin-cover-id)))))
 
 ;;; --- Interactive commands ---
 
@@ -1226,7 +1228,7 @@ Also clears cached poster images for movies so they are re-fetched."
          ;; Get tracks
          (tracks (jellyfin--get-album-tracks album-id)))
     (jellyfin--add-jellyfin-tracks tracks)
-    (jellyfin--playlist-insert-cover album-id artist-id)
+    (jellyfin--playlist-insert-cover album-id)
     (add-hook 'emms-player-started-hook #'jellyfin--playlist-track-started)
     (add-hook 'emms-player-started-hook #'jellyfin--elcava-track-started)
     (switch-to-buffer emms-playlist-buffer)
@@ -1247,12 +1249,9 @@ Also clears cached poster images for movies so they are re-fetched."
          (playlist-id (alist-get 'Id playlist))
          (tracks (jellyfin--get-playlist-items playlist-id)))
     (jellyfin--add-jellyfin-tracks tracks)
-    (let* ((first (aref tracks 0))
-           (first-artists (alist-get 'AlbumArtists first))
-           (first-artist-id (and (> (length first-artists) 0)
-                                 (alist-get 'Id (aref first-artists 0)))))
+    (let ((first (aref tracks 0)))
       (jellyfin--playlist-insert-cover
-       (or (alist-get 'AlbumId first) playlist-id) first-artist-id))
+       (or (alist-get 'AlbumId first) playlist-id)))
     (add-hook 'emms-player-started-hook #'jellyfin--playlist-track-started)
     (add-hook 'emms-player-started-hook #'jellyfin--elcava-track-started)
     (switch-to-buffer emms-playlist-buffer)
@@ -1639,13 +1638,9 @@ Populated by `jellyfin-browse-songs-refetch-metadata'.")
         (message "No songs marked.")
       (setq items (nreverse items))
       (jellyfin--add-jellyfin-tracks items)
-      (let* ((first (car items))
-             (first-artists (alist-get 'AlbumArtists first))
-             (first-artist-id (and (> (length first-artists) 0)
-                                   (alist-get 'Id (aref first-artists 0)))))
+      (let ((first (car items)))
         (jellyfin--playlist-insert-cover
-         (or (alist-get 'AlbumId first) (alist-get 'Id first))
-         first-artist-id))
+         (or (alist-get 'AlbumId first) (alist-get 'Id first))))
       (add-hook 'emms-player-started-hook #'jellyfin--playlist-track-started)
       (add-hook 'emms-player-started-hook #'jellyfin--elcava-track-started)
       (switch-to-buffer emms-playlist-buffer)
