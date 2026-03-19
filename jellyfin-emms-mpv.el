@@ -372,7 +372,9 @@ This is a suitable element for `emms-info-functions'."
           (emms-track-set track 'jellyfin-artist-id artist-id))))))
 
 (with-eval-after-load 'emms
-  (add-to-list 'emms-info-functions #'emms-info-jellyfin))
+  (add-to-list 'emms-info-functions #'emms-info-jellyfin)
+  (when (display-graphic-p)
+    (define-key emms-playlist-mode-map (kbd "!") #'jellyfin--emms-playlist-song-info)))
 
 (defun jellyfin--add-jellyfin-tracks (items)
   "Add Jellyfin audio ITEMS to the EMMS playlist.
@@ -1958,6 +1960,15 @@ Only `q' and mouse scrolling are active; all other keys are suppressed.")
   (if-let ((item (get-text-property (point) 'jellyfin-item)))
       (jellyfin--song-info-render item)
     (message "No song on this line.")))
+
+(defun jellyfin--emms-playlist-song-info ()
+  "Show detailed Jellyfin song info for the track at point in the EMMS playlist."
+  (interactive)
+  (if-let* ((track (emms-playlist-track-at (point)))
+            (url (emms-track-name track))
+            (item (jellyfin--lookup-item-by-url url)))
+      (jellyfin--song-info-render item)
+    (message "No Jellyfin track on this line.")))
 
 ;;; --- Embedded elcava visualizer ---
 ;;
