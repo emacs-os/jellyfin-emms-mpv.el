@@ -1206,9 +1206,6 @@ Also clears cached poster images for movies so they are re-fetched."
     (jellyfin--playlist-insert-cover album-id artist-id)
     (add-hook 'emms-player-started-hook #'jellyfin--playlist-track-started)
     (add-hook 'emms-player-started-hook #'jellyfin--elcava-track-started)
-    (with-current-buffer emms-playlist-buffer
-      (goto-char (point-min))
-      (emms-playlist-mode-play-current-track))
     (switch-to-buffer emms-playlist-buffer)
     (message "Queued %d tracks from %s — %s"
              (length tracks) artist-choice album-choice)))
@@ -1235,9 +1232,6 @@ Also clears cached poster images for movies so they are re-fetched."
        (or (alist-get 'AlbumId first) playlist-id) first-artist-id))
     (add-hook 'emms-player-started-hook #'jellyfin--playlist-track-started)
     (add-hook 'emms-player-started-hook #'jellyfin--elcava-track-started)
-    (with-current-buffer emms-playlist-buffer
-      (goto-char (point-min))
-      (emms-playlist-mode-play-current-track))
     (switch-to-buffer emms-playlist-buffer)
     (message "Queued %d tracks from %s" (length tracks) choice)))
 
