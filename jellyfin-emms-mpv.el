@@ -838,11 +838,9 @@ Uses `completion-all-completions' to respect the user's completion styles."
       (when (and jellyfin--preview-data (minibufferp (current-buffer)))
         (let ((input (minibuffer-contents-no-properties)))
           (if (string-empty-p input)
-              (progn
-                (setq jellyfin--preview-last-input nil)
-                (when-let ((buf (get-buffer "*Jellyfin*")))
-                  (when-let ((win (get-buffer-window buf t)))
-                    (delete-window win))))
+              (unless (equal input jellyfin--preview-last-input)
+                (setq jellyfin--preview-last-input input)
+                (jellyfin--preview-render jellyfin--preview-data))
             (unless (equal input jellyfin--preview-last-input)
               (setq jellyfin--preview-last-input input)
               (let* ((completions (completion-all-completions
