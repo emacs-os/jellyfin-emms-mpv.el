@@ -1303,7 +1303,6 @@ buffer with images and descriptions that narrows as you type."
          ;; Get tracks
          (tracks (jellyfin--get-album-tracks album-id)))
     (jellyfin--add-jellyfin-tracks tracks)
-    (jellyfin--playlist-insert-cover album-id)
     (add-hook 'emms-player-started-hook #'jellyfin--playlist-track-started)
     (add-hook 'emms-player-started-hook #'jellyfin--elcava-track-started)
     (switch-to-buffer emms-playlist-buffer)
@@ -1338,9 +1337,6 @@ buffer with images and descriptions that narrows as you type."
          (playlist-id (alist-get 'Id playlist))
          (tracks (jellyfin--get-playlist-items playlist-id)))
     (jellyfin--add-jellyfin-tracks tracks)
-    (let ((first (aref tracks 0)))
-      (jellyfin--playlist-insert-cover
-       (or (alist-get 'AlbumId first) playlist-id)))
     (add-hook 'emms-player-started-hook #'jellyfin--playlist-track-started)
     (add-hook 'emms-player-started-hook #'jellyfin--elcava-track-started)
     (switch-to-buffer emms-playlist-buffer)
@@ -1738,9 +1734,6 @@ The *Jellyfin Songs* buffer stays open so you can return and queue more."
       (setq items (nreverse items))
       (jellyfin--cherry-picker-unmark-all)
       (jellyfin--add-jellyfin-tracks items)
-      (let ((first (car items)))
-        (jellyfin--playlist-insert-cover
-         (or (alist-get 'AlbumId first) (alist-get 'Id first))))
       (add-hook 'emms-player-started-hook #'jellyfin--playlist-track-started)
       (add-hook 'emms-player-started-hook #'jellyfin--elcava-track-started)
       (switch-to-buffer emms-playlist-buffer)
@@ -1802,11 +1795,13 @@ Uses cached metadata when available; run
   (let ((map (make-keymap)))
     (suppress-keymap map t)
     (define-key map (kbd "q") #'jellyfin--song-info-quit)
+    (define-key map (kbd "RET") #'jellyfin--song-info-queue-album)
+    (define-key map [mouse-1] #'jellyfin--song-info-queue-album)
     (define-key map [wheel-up] (lambda () (interactive) (scroll-down 3)))
     (define-key map [wheel-down] (lambda () (interactive) (scroll-up 3)))
     map)
   "Keymap for the Jellyfin song info buffer.
-Only `q' and mouse scrolling are active; all other keys are suppressed.")
+Only `q', RET, mouse-1 and mouse scrolling are active; all other keys are suppressed.")
 
 (defun jellyfin--song-info-mode ()
   "Set up the current buffer as a Jellyfin song info buffer."
@@ -1824,6 +1819,25 @@ Only `q' and mouse scrolling are active; all other keys are suppressed.")
     (kill-buffer (current-buffer))
     (when (and parent (buffer-live-p parent))
       (switch-to-buffer parent))))
+
+(defun jellyfin--song-info-queue-album ()
+  "Queue the album at point to EMMS and dismiss the song info buffer."
+  (interactive)
+  (if-let ((album-id (get-text-property (point) 'jellyfin-album-id)))
+      (let ((tracks (jellyfin--get-album-tracks album-id)))
+        (if (and tracks (> (length tracks) 0))
+            (progn
+              (jellyfin--add-jellyfin-tracks tracks)
+              (add-hook 'emms-player-started-hook
+                        #'jellyfin--playlist-track-started)
+              (add-hook 'emms-player-started-hook
+                        #'jellyfin--elcava-track-started)
+              (let ((parent jellyfin--parent-buffer))
+                (kill-buffer (current-buffer))
+                (switch-to-buffer emms-playlist-buffer))
+              (message "Queued %d tracks" (length tracks)))
+          (message "No tracks found for this album.")))
+    (message "No album at point.")))
 
 (defun jellyfin--song-info-render (item)
   "Render a detailed song info buffer for ITEM."
@@ -1892,6 +1906,9 @@ Only `q' and mouse scrolling are active; all other keys are suppressed.")
               (insert "\n"
                       (propertize "Discography"
                                   'face '(:weight bold :height 1.1))
+                      "  "
+                      (propertize "(click album to send to EMMS)"
+                                  'face '(:foreground "gray60" :slant italic))
                       "\n\n")
               (let* ((img-w 150)
                      (min-gap 20)
@@ -1915,7 +1932,10 @@ Only `q' and mouse scrolling are active; all other keys are suppressed.")
                                    " " 'display
                                    `(space :align-to (,(* idx col-w))))))
                         (when img
-                          (insert-image img "[album]")))
+                          (let ((start (point)))
+                            (insert-image img "[album]")
+                            (put-text-property start (point)
+                                              'jellyfin-album-id alb-id))))
                       (setq idx (1+ idx))))
                   (insert "\n")
                   ;; Title row
@@ -1931,16 +1951,19 @@ Only `q' and mouse scrolling are active; all other keys are suppressed.")
                           (insert (propertize
                                    " " 'display
                                    `(space :align-to (,(* idx col-w))))))
-                        (insert (propertize alb-name
-                                            'face '(:weight bold)))
-                        (when alb-year
-                          (insert (propertize (format "  (%d)" alb-year)
-                                              'face '(:foreground "gray60"))))
-                        (when current-p
-                          (insert (propertize
-                                   "  <--"
-                                   'face '(:foreground "gold"
-                                           :weight bold)))))
+                        (let ((start (point)))
+                          (insert (propertize alb-name
+                                              'face '(:weight bold)))
+                          (when alb-year
+                            (insert (propertize (format "  (%d)" alb-year)
+                                                'face '(:foreground "gray60"))))
+                          (when current-p
+                            (insert (propertize
+                                     "  <--"
+                                     'face '(:foreground "gold"
+                                             :weight bold))))
+                          (put-text-property start (point)
+                                            'jellyfin-album-id alb-id)))
                       (setq idx (1+ idx))))
                   (insert "\n\n"))))))
         ;; Artist bio
