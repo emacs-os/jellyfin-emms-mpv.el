@@ -5,7 +5,7 @@ Browse and play music/video from a Jellyfin server via EMMS + mpv. Tracks playba
 ##### Music streaming via EMMS, with experimental elcava visualizer
 
 <p align="center">
-  <img src="screenshot_jellyfin_emms_elcava.png" width="965">
+  <video src="https://github.com/user-attachments/assets/f0aca508-51b7-4068-9ac7-f0a3ed96d523" width="965" autoplay loop muted></video>
 </p>
 
 ##### Movie & Show Galleries
