@@ -51,7 +51,9 @@ machine your-server.example.com port 8096 login USERNAME password PASSWORD
         "https://your-server.example.com"
         jellyfin-completing-read-preview t
         jellyfin-preferred-language "eng"
-        jellyfin-subtitles t))
+        jellyfin-subtitles nil
+        jellyfin-emms-cover-art t
+        jellyfin-elcava-emms-experimental nil))
 ```
 
 </td>
@@ -68,7 +70,9 @@ machine your-server.example.com port 8096 login USERNAME password PASSWORD
         "https://your-server.example.com"
         jellyfin-completing-read-preview t
         jellyfin-preferred-language "eng"
-        jellyfin-subtitles t))
+        jellyfin-subtitles nil
+        jellyfin-emms-cover-art t
+        jellyfin-elcava-emms-experimental nil))
 ```
 
 </td>
