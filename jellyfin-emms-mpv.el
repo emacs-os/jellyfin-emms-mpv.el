@@ -1257,22 +1257,19 @@ Also clears cached poster images for movies so they are re-fetched."
 (defun jellyfin-browse-shows ()
   "Browse TV shows: Series -> Season -> Episode, then play in mpv.
 When `jellyfin-preview' is non-nil, shows a preview buffer with
-images and descriptions.  Series selection uses completing-read with
-preview; seasons and episodes use clickable drill-down in the buffer."
+images and descriptions that narrows as you type, like
+`jellyfin-browse-movies'.  All three steps use completing-read."
   (interactive)
   (jellyfin--ensure-auth)
   (let* ((series (jellyfin--retry-if-empty
                    (lambda () (jellyfin--get-items "Series"))))
          (series-alist (mapcar (lambda (s) (cons (alist-get 'Name s) s))
                                series))
-         series-choice series-item series-id
-         season-item season-id season-num
-         episodes chosen-ep)
-    ;; Step 1: Pick series
-    (if jellyfin-preview
-        (progn
-          (setq jellyfin--preview-data series-alist)
-          (setq series-choice
+         ;; Step 1: Pick series
+         (series-choice
+          (if jellyfin-preview
+              (progn
+                (setq jellyfin--preview-data series-alist)
                 (minibuffer-with-setup-hook
                     (lambda ()
                       (add-hook 'post-command-hook
@@ -1280,60 +1277,78 @@ preview; seasons and episodes use clickable drill-down in the buffer."
                       (add-hook 'minibuffer-exit-hook
                                 #'jellyfin--preview-cleanup nil t))
                   (completing-read "Series: "
-                                   (mapcar #'car series-alist) nil t))))
-      (setq series-choice
+                                   (mapcar #'car series-alist) nil t)))
             (completing-read "Series: "
                              (mapcar #'car series-alist) nil t)))
-    (setq series-item (cdr (assoc series-choice series-alist))
-          series-id (alist-get 'Id series-item))
-    ;; Step 2: Pick season + episode
-    (if jellyfin-preview
-        ;; Drill-down buffers handle playback directly
-        (jellyfin--show-preview-season series-item)
-      ;; Non-preview: completing-read for season and episode
-      (let* ((seasons (jellyfin--get-seasons series-id))
-             (season-alist (mapcar (lambda (s) (cons (alist-get 'Name s) s))
-                                   seasons))
-             (season-choice (completing-read "Season: "
-                                             (mapcar #'car season-alist) nil t)))
-        (setq season-item (cdr (assoc season-choice season-alist))
-              season-id (alist-get 'Id season-item)
-              season-num (alist-get 'IndexNumber season-item)
-              episodes (jellyfin--get-episodes series-id season-id))
-        (let* ((episode-alist
-                (mapcar (lambda (ep)
-                          (cons (format "S%02dE%02d — %s"
-                                        (or season-num 0)
-                                        (or (alist-get 'IndexNumber ep) 0)
-                                        (alist-get 'Name ep))
-                                ep))
-                        episodes))
-               (ep-choice (completing-read "Episode: "
-                                           (lambda (str pred action)
-                                             (if (eq action 'metadata)
-                                                 '(metadata (display-sort-function . identity))
-                                               (complete-with-action
-                                                action (mapcar #'car episode-alist)
-                                                str pred)))
-                                           nil t)))
-          (setq chosen-ep (cdr (assoc ep-choice episode-alist))))
-        ;; Play from chosen episode onward
-        (let ((chosen-id (alist-get 'Id chosen-ep))
-              (found nil)
-              (urls nil)
-              (ep-ids nil))
-          (seq-doseq (ep episodes)
-            (when (or found (equal (alist-get 'Id ep) chosen-id))
-              (setq found t)
-              (push (jellyfin--stream-url (alist-get 'Id ep) "Videos") urls)
-              (push (alist-get 'Id ep) ep-ids)))
-          (setq urls (nreverse urls)
-                ep-ids (nreverse ep-ids))
-          (jellyfin--mpv-play urls (apply #'vector ep-ids))
-          (message "Playing %s — %s + %d more"
-                   series-choice
-                   (alist-get 'Name chosen-ep)
-                   (1- (length urls))))))))
+         (series-item (cdr (assoc series-choice series-alist)))
+         (series-id (alist-get 'Id series-item))
+         ;; Step 2: Pick season
+         (seasons (jellyfin--get-seasons series-id))
+         (season-alist (mapcar (lambda (s) (cons (alist-get 'Name s) s))
+                               seasons))
+         (season-choice
+          (if jellyfin-preview
+              (progn
+                (setq jellyfin--preview-data season-alist)
+                (minibuffer-with-setup-hook
+                    (lambda ()
+                      (add-hook 'post-command-hook
+                                #'jellyfin--preview-update nil t)
+                      (add-hook 'minibuffer-exit-hook
+                                #'jellyfin--preview-cleanup nil t))
+                  (completing-read "Season: "
+                                   (mapcar #'car season-alist) nil t)))
+            (completing-read "Season: "
+                             (mapcar #'car season-alist) nil t)))
+         (season-item (cdr (assoc season-choice season-alist)))
+         (season-id (alist-get 'Id season-item))
+         (season-num (alist-get 'IndexNumber season-item))
+         ;; Step 3: Pick episode
+         (episodes (jellyfin--get-episodes series-id season-id))
+         (episode-alist
+          (mapcar (lambda (ep)
+                    (cons (format "S%02dE%02d — %s"
+                                  (or season-num 0)
+                                  (or (alist-get 'IndexNumber ep) 0)
+                                  (alist-get 'Name ep))
+                          ep))
+                  episodes))
+         (ep-table (lambda (str pred action)
+                     (if (eq action 'metadata)
+                         '(metadata (display-sort-function . identity))
+                       (complete-with-action
+                        action (mapcar #'car episode-alist)
+                        str pred))))
+         (ep-choice
+          (if jellyfin-preview
+              (progn
+                (setq jellyfin--preview-data episode-alist)
+                (minibuffer-with-setup-hook
+                    (lambda ()
+                      (add-hook 'post-command-hook
+                                #'jellyfin--preview-update nil t)
+                      (add-hook 'minibuffer-exit-hook
+                                #'jellyfin--preview-cleanup nil t))
+                  (completing-read "Episode: " ep-table nil t)))
+            (completing-read "Episode: " ep-table nil t)))
+         (chosen-ep (cdr (assoc ep-choice episode-alist))))
+    ;; Play from chosen episode onward
+    (let ((chosen-id (alist-get 'Id chosen-ep))
+          (found nil)
+          (urls nil)
+          (ep-ids nil))
+      (seq-doseq (ep episodes)
+        (when (or found (equal (alist-get 'Id ep) chosen-id))
+          (setq found t)
+          (push (jellyfin--stream-url (alist-get 'Id ep) "Videos") urls)
+          (push (alist-get 'Id ep) ep-ids)))
+      (setq urls (nreverse urls)
+            ep-ids (nreverse ep-ids))
+      (jellyfin--mpv-play urls (apply #'vector ep-ids))
+      (message "Playing %s — %s + %d more"
+               series-choice
+               (alist-get 'Name chosen-ep)
+               (1- (length urls))))))
 
 (defvar jellyfin--shows-gallery-cache nil
   "Cached list of series items from the Jellyfin server.")
