@@ -19,7 +19,7 @@ Browse and play music/video from a Jellyfin server via EMMS + mpv. Tracks playba
 | `M-x jellyfin-browse-continue-watching` | Resume where you left off by typing in minibuffer |
 | `M-x jellyfin-browse-albums` | Artist -> album by typing in minibuffer, queue in EMMS |
 | `M-x jellyfin-browse-playlists` | Pick playlist by typing in minibuffer, queue in EMMS |
-| `M-x jellyfin-browse-songs` | Interactive dired-like buffer: `m` mark, `u` unmark, RET queue |
+| `M-x jellyfin-browse-songs` | Dired-like song picker, keybinds shown in header line |
 
 With `jellyfin-completing-read-preview` enabled, minibuffer commands show poster previews as you type. Gallery commands always show posters (GUI only) and cache metadata and images to disk on first run - use the corresponding `*-refetch-metadata` command after changing media on the server.
 

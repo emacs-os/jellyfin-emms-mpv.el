@@ -1583,12 +1583,12 @@ Populated by `jellyfin-browse-songs-refetch-metadata'.")
 (defvar jellyfin--cherry-picker-mode-map
   (let ((map (make-sparse-keymap)))
     (set-keymap-parent map special-mode-map)
-    (define-key map (kbd "m") (lambda () (interactive) (jellyfin--cherry-picker-mark)))
-    (define-key map (kbd "u") (lambda () (interactive) (jellyfin--cherry-picker-unmark)))
-    (define-key map (kbd "U") (lambda () (interactive) (jellyfin--cherry-picker-unmark-all)))
-    (define-key map (kbd "t") (lambda () (interactive) (jellyfin--cherry-picker-toggle-all)))
-    (define-key map (kbd "RET") (lambda () (interactive) (jellyfin--cherry-picker-execute)))
-    (define-key map (kbd "q") (lambda () (interactive) (jellyfin--cherry-picker-quit)))
+    (define-key map (kbd "m") #'jellyfin--cherry-picker-mark)
+    (define-key map (kbd "u") #'jellyfin--cherry-picker-unmark)
+    (define-key map (kbd "U") #'jellyfin--cherry-picker-unmark-all)
+    (define-key map (kbd "M") #'jellyfin--cherry-picker-mark-all)
+    (define-key map (kbd "RET") #'jellyfin--cherry-picker-execute)
+    (define-key map (kbd "q") #'jellyfin--cherry-picker-quit)
     map)
   "Keymap for the Jellyfin cherry picker buffer.")
 
@@ -1596,7 +1596,10 @@ Populated by `jellyfin-browse-songs-refetch-metadata'.")
   "Set up the current buffer as a Jellyfin cherry picker buffer."
   (special-mode)
   (use-local-map jellyfin--cherry-picker-mode-map)
-  (setq mode-name "Jellyfin Songs"))
+  (setq mode-name "Jellyfin Songs"
+        header-line-format
+        (substitute-command-keys
+         " \\<jellyfin--cherry-picker-mode-map>\\[jellyfin--cherry-picker-mark] mark  \\[jellyfin--cherry-picker-unmark] unmark  \\[jellyfin--cherry-picker-mark-all] mark all  \\[jellyfin--cherry-picker-unmark-all] unmark all  \\[jellyfin--cherry-picker-execute] queue  \\[jellyfin--cherry-picker-quit] quit")))
 
 (defun jellyfin--cherry-picker-render (songs)
   "Render SONGS into the *Jellyfin Songs* buffer."
@@ -1623,11 +1626,11 @@ Populated by `jellyfin-browse-songs-refetch-metadata'.")
             (insert "\n")))
         (goto-char (point-min))))
     (switch-to-buffer buf)
-    (message "%d songs loaded. m=mark, u=unmark, t=toggle, RET=queue, q=quit"
-             (length songs))))
+    (message "%d songs loaded." (length songs))))
 
 (defun jellyfin--cherry-picker-mark ()
   "Mark the song on the current line and advance."
+  (interactive)
   (let ((inhibit-read-only t))
     (save-excursion
       (beginning-of-line)
@@ -1637,6 +1640,7 @@ Populated by `jellyfin-browse-songs-refetch-metadata'.")
 
 (defun jellyfin--cherry-picker-unmark ()
   "Unmark the song on the current line and advance."
+  (interactive)
   (let ((inhibit-read-only t))
     (save-excursion
       (beginning-of-line)
@@ -1646,25 +1650,26 @@ Populated by `jellyfin-browse-songs-refetch-metadata'.")
 
 (defun jellyfin--cherry-picker-unmark-all ()
   "Unmark all songs in the buffer."
+  (interactive)
   (let ((inhibit-read-only t))
     (save-excursion
       (goto-char (point-min))
       (while (re-search-forward "^\\[x\\]" nil t)
         (replace-match "[ ]")))))
 
-(defun jellyfin--cherry-picker-toggle-all ()
-  "Toggle marks on all songs in the buffer."
+(defun jellyfin--cherry-picker-mark-all ()
+  "Mark all songs in the buffer."
+  (interactive)
   (let ((inhibit-read-only t))
     (save-excursion
       (goto-char (point-min))
-      (while (not (eobp))
-        (cond
-         ((looking-at "\\[x\\]") (replace-match "[ ]"))
-         ((looking-at "\\[ \\]") (replace-match "[x]")))
-        (forward-line 1)))))
+      (while (re-search-forward "^\\[ \\]" nil t)
+        (replace-match "[x]")))))
 
 (defun jellyfin--cherry-picker-execute ()
-  "Append all marked songs to EMMS playlist and close the buffer."
+  "Append marked songs to EMMS playlist, unmark them, and switch to EMMS.
+The *Jellyfin Songs* buffer stays open so you can return and queue more."
+  (interactive)
   (let ((items nil))
     (save-excursion
       (goto-char (point-min))
@@ -1677,6 +1682,7 @@ Populated by `jellyfin-browse-songs-refetch-metadata'.")
     (if (null items)
         (message "No songs marked.")
       (setq items (nreverse items))
+      (jellyfin--cherry-picker-unmark-all)
       (jellyfin--add-jellyfin-tracks items)
       (let ((first (car items)))
         (jellyfin--playlist-insert-cover
@@ -1684,11 +1690,11 @@ Populated by `jellyfin-browse-songs-refetch-metadata'.")
       (add-hook 'emms-player-started-hook #'jellyfin--playlist-track-started)
       (add-hook 'emms-player-started-hook #'jellyfin--elcava-track-started)
       (switch-to-buffer emms-playlist-buffer)
-      (message "Queued %d songs." (length items))
-      (kill-buffer "*Jellyfin Songs*"))))
+      (message "Queued %d songs." (length items)))))
 
 (defun jellyfin--cherry-picker-quit ()
   "Quit the cherry picker without queueing anything."
+  (interactive)
   (kill-buffer (current-buffer)))
 
 ;;;###autoload
