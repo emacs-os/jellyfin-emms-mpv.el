@@ -2,19 +2,6 @@
 
 Browse and play music/video from a Jellyfin server via EMMS + mpv. Tracks playback position and reports to Jellyfin so "Continue Watching" stays in sync.
 
-##### Music streaming via EMMS, with experimental elcava visualizer
-
-<p align="center">
-  <video src="https://github.com/user-attachments/assets/f0aca508-51b7-4068-9ac7-f0a3ed96d523" width="965" autoplay loop muted></video>
-</p>
-
-##### Movie & Show Galleries
-
-<table><tr>
-<td><img src="screencast_movies.gif" width="320"></td>
-<td><img src="screencast_shows.gif" width="320"></td>
-</tr></table>
-
 ## Requirements
 
 - A Jellyfin server
