@@ -231,7 +231,7 @@ Callback kills the response buffer and clears the token on 401."
                     (when (and (boundp 'url-http-response-status)
                                (eql url-http-response-status 401))
                       (setq jellyfin--token nil))
-                    (when-let ((buf (current-buffer)))
+                    (when-let* ((buf (current-buffer)))
                       (when (buffer-live-p buf)
                         (kill-buffer buf)))))))
 
@@ -334,7 +334,7 @@ Returns the Items array."
 (defun jellyfin--lookup-item-by-url (url)
   "Look up a Jellyfin item by its stream URL.
 Checks the in-memory item cache first, falls back to API."
-  (when-let ((id (jellyfin--extract-item-id url)))
+  (when-let* ((id (jellyfin--extract-item-id url)))
     (or (gethash id jellyfin--item-cache)
         (let ((item (jellyfin--get-item-by-id id)))
           (when item
@@ -347,7 +347,7 @@ This is a suitable element for `emms-info-functions'."
   (when (and jellyfin-server-url
              (eq (emms-track-type track) 'url)
              (string-prefix-p jellyfin-server-url (emms-track-name track)))
-    (when-let ((item (jellyfin--lookup-item-by-url (emms-track-name track))))
+    (when-let* ((item (jellyfin--lookup-item-by-url (emms-track-name track))))
       (let* ((artists (alist-get 'AlbumArtists item))
              (artist-name (and (> (length artists) 0)
                                (alist-get 'Name (aref artists 0))))
@@ -393,7 +393,7 @@ regardless of whether `emms-info-asynchronously' is non-nil."
         (save-excursion
           (goto-char (point-max))
           (forward-line -1)
-          (when-let ((emms-track (emms-playlist-track-at (point))))
+          (when-let* ((emms-track (emms-playlist-track-at (point))))
             (emms-track-set emms-track 'jellyfin-cover-id
                             (or (alist-get 'AlbumId item) id))
             (emms-track-set emms-track 'jellyfin-artist-id artist-id)))))))
@@ -641,7 +641,7 @@ Results are cached in memory and on disk."
                 (let ((pos (alist-get 'data msg)))
                   (when (numberp pos)
                     (setq jellyfin--mpv-position pos)
-                    (when-let ((item-id (and jellyfin--mpv-playlist-pos
+                    (when-let* ((item-id (and jellyfin--mpv-playlist-pos
                                              jellyfin--mpv-item-ids
                                              (aref jellyfin--mpv-item-ids
                                                    jellyfin--mpv-playlist-pos))))
@@ -854,7 +854,7 @@ Cleans up any existing session first."
 
 (defun jellyfin--preview-select (name)
   "Insert NAME into the active minibuffer and exit."
-  (when-let ((mini (active-minibuffer-window)))
+  (when-let* ((mini (active-minibuffer-window)))
     (with-selected-window mini
       (delete-minibuffer-contents)
       (insert name)
@@ -914,8 +914,8 @@ Uses `completion-all-completions' to respect the user's completion styles."
     (cancel-timer jellyfin--preview-timer)
     (setq jellyfin--preview-timer nil))
   (setq jellyfin--preview-last-input nil)
-  (when-let ((buf (get-buffer "*Jellyfin*")))
-    (when-let ((win (get-buffer-window buf t)))
+  (when-let* ((buf (get-buffer "*Jellyfin*")))
+    (when-let* ((win (get-buffer-window buf t)))
       (when (not (one-window-p t (window-frame win)))
         (delete-window win)))
     (kill-buffer buf))
@@ -945,7 +945,7 @@ BUFFER-NAME defaults to \"*Jellyfin*\"."
                 (action (funcall make-action item))
                 (label (funcall make-label item)))
             (when (display-graphic-p)
-              (when-let ((image (jellyfin--fetch-image id)))
+              (when-let* ((image (jellyfin--fetch-image id)))
                 (insert-text-button "[poster]"
                                     'display image
                                     'action action
@@ -977,7 +977,7 @@ A plist (:items ITEMS :make-action FN :make-label FN) or nil.")
   (dolist (buf (buffer-list))
     (when (and (buffer-live-p buf)
                (buffer-local-value 'jellyfin--grid-state buf))
-      (when-let ((win (get-buffer-window buf t)))
+      (when-let* ((win (get-buffer-window buf t)))
         (with-selected-window win
           (let ((state (buffer-local-value 'jellyfin--grid-state buf)))
             (jellyfin--show-dired-render-grid
@@ -1098,7 +1098,7 @@ Clicking an episode plays it directly in mpv."
      (lambda ()
        (insert (propertize series-name 'face 'bold) "\n")
        (when (display-graphic-p)
-         (when-let ((image (jellyfin--fetch-image season-id)))
+         (when-let* ((image (jellyfin--fetch-image season-id)))
            (insert-image image "[poster]")
            (insert "\n")))
        (insert (propertize season-name 'face 'bold) "\n"))
@@ -1133,13 +1133,13 @@ Requires `jellyfin-emms-cover-art' and GUI Emacs."
               (insert "\n")
               (put-text-property start (point) 'jellyfin-cover t)))
           ;; Force window to show the update
-          (when-let ((win (get-buffer-window emms-playlist-buffer t)))
+          (when-let* ((win (get-buffer-window emms-playlist-buffer t)))
             (set-window-point win (point-min))))))))
 
 (defun jellyfin--playlist-track-started ()
   "Update playlist cover art when a new track starts playing."
   (when (and jellyfin-emms-cover-art (display-graphic-p))
-    (when-let ((track (emms-playlist-current-selected-track)))
+    (when-let* ((track (emms-playlist-current-selected-track)))
       (jellyfin--playlist-insert-cover
        (emms-track-get track 'jellyfin-cover-id)))))
 
@@ -1510,33 +1510,54 @@ Also clears cached poster images for shows so they are re-fetched."
   "Resume a movie or show from Jellyfin's Continue Watching list."
   (interactive)
   (jellyfin--ensure-auth)
-  (let* ((items (jellyfin--retry-if-empty
-                  (lambda ()
-                    (alist-get 'Items
-                               (jellyfin--api-get
-                                "/UserItems/Resume"
-                                `(("userId" . ,jellyfin--user-id)
-                                  ("enableUserData" . "true")
-                                  ("mediaTypes" . "Video")
-                                  ("limit" . "20")
-                                  ("fields" . "MediaSources,Overview")))))))
-         (labels (mapcar
-                  (lambda (item)
-                    (let* ((type (alist-get 'Type item))
-                           (name (alist-get 'Name item))
-                           (ticks (alist-get 'PlaybackPositionTicks
-                                             (alist-get 'UserData item)))
-                           (pos-min (/ (or ticks 0) 600000000))
-                           (label
-                            (if (equal type "Episode")
-                                (format "%s — S%02dE%02d — %s  [%dm in]"
-                                        (or (alist-get 'SeriesName item) "?")
-                                        (or (alist-get 'ParentIndexNumber item) 0)
-                                        (or (alist-get 'IndexNumber item) 0)
-                                        name pos-min)
-                              (format "%s  [%dm in]" name pos-min))))
-                      (cons label item)))
-                  items))
+  (let* ((resume-items
+          (jellyfin--retry-if-empty
+           (lambda ()
+             (alist-get 'Items
+                        (jellyfin--api-get
+                         "/UserItems/Resume"
+                         `(("userId" . ,jellyfin--user-id)
+                           ("enableUserData" . "true")
+                           ("mediaTypes" . "Video")
+                           ("limit" . "20")
+                           ("fields" . "MediaSources,Overview")))))))
+         (nextup-items
+          (alist-get 'Items
+                     (jellyfin--api-get
+                      "/Shows/NextUp"
+                      `(("userId" . ,jellyfin--user-id)
+                        ("enableUserData" . "true")
+                        ("limit" . "20")
+                        ("fields" . "MediaSources,Overview")))))
+         (make-label
+          (lambda (item tag)
+            (let* ((type (alist-get 'Type item))
+                   (name (alist-get 'Name item))
+                   (ticks (alist-get 'PlaybackPositionTicks
+                                     (alist-get 'UserData item)))
+                   (pos-min (/ (or ticks 0) 600000000))
+                   (base
+                    (if (equal type "Episode")
+                        (format "%s — S%02dE%02d — %s  [%dm in]"
+                                (or (alist-get 'SeriesName item) "?")
+                                (or (alist-get 'ParentIndexNumber item) 0)
+                                (or (alist-get 'IndexNumber item) 0)
+                                name pos-min)
+                      (format "%s  [%dm in]" name pos-min)))
+                   (bracket (format "[%s]" tag))
+                   (width (frame-width))
+                   (pad (max 2 (- width (length base) (length bracket))))
+                   (label (concat base (make-string pad ?\s) bracket)))
+              (cons label item))))
+         (cw-labels (mapcar (lambda (it) (funcall make-label it "Continue Watching"))
+                            (append resume-items nil)))
+         (nu-labels (mapcar (lambda (it) (funcall make-label it "Next Up"))
+                            (append nextup-items nil)))
+         (labels (let (result (cw cw-labels) (nu nu-labels))
+                   (while (or cw nu)
+                     (when cw (push (pop cw) result))
+                     (when nu (push (pop nu) result)))
+                   (nreverse result)))
          (cands (mapcar #'car labels))
          (choice (if jellyfin-completing-read-preview
                      (progn
@@ -1818,7 +1839,7 @@ Only `q', RET, mouse-1 and mouse scrolling are active; all other keys are suppre
 (defun jellyfin--song-info-queue-album ()
   "Queue the album at point to EMMS and dismiss the song info buffer."
   (interactive)
-  (if-let ((album-id (get-text-property (point) 'jellyfin-album-id)))
+  (if-let* ((album-id (get-text-property (point) 'jellyfin-album-id)))
       (let ((tracks (jellyfin--get-album-tracks album-id)))
         (if (and tracks (> (length tracks) 0))
             (progn
@@ -1862,13 +1883,13 @@ Only `q', RET, mouse-1 and mouse scrolling are active; all other keys are suppre
         (jellyfin--song-info-mode)
         ;; Artist backdrop
         (when (and (display-graphic-p) artist-id)
-          (when-let ((backdrop (jellyfin--fetch-image-type
+          (when-let* ((backdrop (jellyfin--fetch-image-type
                                 artist-id "Backdrop" 600)))
             (insert-image backdrop "[backdrop]")
             (insert "\n\n")))
         ;; Artist image + name + genres
         (when (and (display-graphic-p) artist-id)
-          (when-let ((artist-img (jellyfin--fetch-image-type
+          (when-let* ((artist-img (jellyfin--fetch-image-type
                                   artist-id "Primary" 150)))
             (insert-image artist-img "[artist]")
             (insert "\n")))
@@ -1975,7 +1996,7 @@ Only `q', RET, mouse-1 and mouse scrolling are active; all other keys are suppre
 (defun jellyfin--cherry-picker-song-info ()
   "Show detailed info for the song on the current line."
   (interactive)
-  (if-let ((item (get-text-property (point) 'jellyfin-item)))
+  (if-let* ((item (get-text-property (point) 'jellyfin-item)))
       (jellyfin--song-info-render item)
     (message "No song on this line.")))
 
@@ -2030,7 +2051,7 @@ Only `q', RET, mouse-1 and mouse scrolling are active; all other keys are suppre
         (with-current-buffer emms-playlist-buffer
           (let ((inhibit-read-only t)
                 (saved-pt (point))
-                (saved-win-pt (when-let ((w (get-buffer-window
+                (saved-win-pt (when-let* ((w (get-buffer-window
                                              emms-playlist-buffer t)))
                                 (cons w (window-point w))))
                 (blocks " ▁▂▃▄▅▆▇█")
