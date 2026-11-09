@@ -81,6 +81,7 @@
 (declare-function emms-playlist-mode-play-current-track "emms-playlist-mode")
 
 (defvar url-http-end-of-headers)
+(defvar url-http-response-status)
 (defvar emms-playlist-buffer)
 (defvar emms-info-functions)
 
@@ -150,7 +151,7 @@ Requires the `elcava' package and `parec'."
 ;;; --- Authentication ---
 
 (defun jellyfin--auth-header ()
-  "Build the X-Emby-Authorization header value."
+  "Build the MediaBrowser Authorization header value."
   (format "MediaBrowser Client=\"%s\", Device=\"%s\", DeviceId=\"%s\", Version=\"%s\"%s"
           jellyfin--client-name
           jellyfin--device-name
@@ -180,13 +181,19 @@ Requires the `elcava' package and `parec'."
          (url-request-method "POST")
          (url-request-extra-headers
           `(("Content-Type" . "application/json")
-            ("X-Emby-Authorization" . ,(jellyfin--auth-header))))
+            ("Authorization" . ,(jellyfin--auth-header))))
          (url-request-data
           (json-encode `((Username . ,user) (Pw . ,password))))
          (buf (url-retrieve-synchronously
                (concat jellyfin-server-url "/Users/AuthenticateByName"))))
     (with-current-buffer buf
       (goto-char url-http-end-of-headers)
+      (unless (eql url-http-response-status 200)
+        (let ((status url-http-response-status)
+              (body (string-trim (buffer-substring (point) (point-max)))))
+          (kill-buffer)
+          (user-error "Jellyfin authentication failed (HTTP %s): %s"
+                      status body)))
       (let ((resp (json-read)))
         (setq jellyfin--token (alist-get 'AccessToken resp))
         (setq jellyfin--user-id (alist-get 'Id (alist-get 'User resp))))
@@ -210,7 +217,7 @@ Returns parsed JSON."
          (url-request-noninteractive t)
          (url-request-method "GET")
          (url-request-extra-headers
-          `(("X-Emby-Authorization" . ,(jellyfin--auth-header))))
+          `(("Authorization" . ,(jellyfin--auth-header))))
          (buf (url-retrieve-synchronously
                (concat jellyfin-server-url path query))))
     (with-current-buffer buf
@@ -227,7 +234,7 @@ Callback kills the response buffer and clears the token on 401."
         (url-request-method "POST")
         (url-request-extra-headers
          `(("Content-Type" . "application/json")
-           ("X-Emby-Authorization" . ,(jellyfin--auth-header))))
+           ("Authorization" . ,(jellyfin--auth-header))))
         (url-request-data (json-encode body)))
     (url-retrieve (concat jellyfin-server-url path)
                   (lambda (_status &rest _)
