@@ -25,7 +25,7 @@ With `jellyfin-completing-read-preview` enabled, minibuffer commands show poster
 
 ## Installation
 
-Add credentials to `~/.authinfo`:
+Add credentials to `~/.authinfo` or `~/.authinfo.gpg`:
 
 ```
 machine your-server.example.com login USERNAME password PASSWORD
@@ -35,6 +35,14 @@ If your server uses a custom port (e.g. `http://your-server.example.com:8096`), 
 
 ```
 machine your-server.example.com port 8096 login USERNAME password PASSWORD
+```
+
+Credentials are looked up via `auth-source`, so any backend works. For example, to use [pass](https://www.passwordstore.org/), add `(auth-source-pass-enable)` to your config and create an entry named after the server host:
+
+```
+pass insert -m your-server.example.com
+PASSWORD
+user: USERNAME
 ```
 
 <table><tr>

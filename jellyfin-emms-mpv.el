@@ -172,6 +172,9 @@ Requires the `elcava' package and `parec'."
          (user (plist-get found :user))
          (secret (plist-get found :secret))
          (password (if (functionp secret) (funcall secret) secret))
+         (_ (unless (and user password)
+              (user-error "No Jellyfin credentials for %s found via auth-source"
+                          host)))
          (url-show-status nil)
          (url-request-noninteractive t)
          (url-request-method "POST")
