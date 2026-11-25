@@ -4,6 +4,8 @@ Browse and play music/video from a Jellyfin server via EMMS + mpv. Tracks playba
 
 ![Movie poster gallery from jellyfin-browse-movies-gallery](screenshots/movies-gallery.png)
 
+![Album queued in the EMMS playlist with cover art](screenshots/emms-playlist.png)
+
 ## Requirements
 
 - A Jellyfin server
