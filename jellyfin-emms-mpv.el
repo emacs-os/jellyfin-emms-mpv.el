@@ -2,6 +2,11 @@
 
 ;; Copyright (C) 2026 emacs-os
 
+;; Version: 0.15
+;; Package-Requires: ((emacs "27.1") (jellyfin "0.1"))
+;; Keywords: multimedia
+;; URL: https://github.com/emacs-os/jellyfin-emms-mpv.el
+
 ;; This program is free software: you can redistribute it and/or modify
 ;; it under the terms of the GNU General Public License as published by
 ;; the Free Software Foundation, either version 3 of the License, or
@@ -22,6 +27,8 @@
 ;; so "Continue Watching" stays up to date.
 ;;
 ;; Requirements:
+;;   - jellyfin.el (https://github.com/emacs-os/jellyfin.el), the API
+;;     client this package is built on
 ;;   - EMMS
 ;;   - mpv
 ;;
@@ -63,7 +70,7 @@
 
 ;;; Code:
 
-(require 'auth-source)
+(require 'jellyfin)
 (require 'json)
 (require 'seq)
 (require 'url)
@@ -80,19 +87,8 @@
 (declare-function emms-playlist-current-selected-track "emms")
 (declare-function emms-playlist-mode-play-current-track "emms-playlist-mode")
 
-(defvar url-http-end-of-headers)
-(defvar url-http-response-status)
 (defvar emms-playlist-buffer)
 (defvar emms-info-functions)
-
-(defgroup jellyfin nil
-  "Jellyfin media server client."
-  :group 'multimedia
-  :prefix "jellyfin-")
-
-(defcustom jellyfin-server-url nil
-  "Base URL of the Jellyfin server (e.g. \"https://host.example.com\")."
-  :type 'string)
 
 (define-obsolete-variable-alias 'jellyfin-preview
   'jellyfin-completing-read-preview "0.2.0")
@@ -102,37 +98,34 @@
 during minibuffer completion in `jellyfin-browse-movies',
 `jellyfin-browse-shows', and `jellyfin-browse-continue-watching'.
 Has no effect on gallery commands."
-  :type 'boolean)
+  :type 'boolean
+  :group 'jellyfin)
 
 (defcustom jellyfin-preferred-language nil
   "Preferred audio language code (e.g. \"eng\", \"fre\", \"jpn\").
 When set, video streams will use the audio track matching this language
 if available.  Uses ISO 639-2 three-letter codes as returned by Jellyfin."
-  :type '(choice (const nil) string))
+  :type '(choice (const nil) string)
+  :group 'jellyfin)
 
 (defcustom jellyfin-subtitles nil
   "When non-nil, enable subtitles matching `jellyfin-preferred-language'.
 Requires `jellyfin-preferred-language' to be set."
-  :type 'boolean)
+  :type 'boolean
+  :group 'jellyfin)
 
 (defcustom jellyfin-emms-cover-art t
   "When non-nil, show album cover art in the EMMS playlist buffer.
 Requires GUI Emacs."
-  :type 'boolean)
+  :type 'boolean
+  :group 'jellyfin)
 
 (defcustom jellyfin-elcava-emms-experimental nil
   "When non-nil, show an embedded elcava spectrum visualizer in the playlist.
 Displays a small bar visualizer below the album cover art.
 Requires the `elcava' package and `parec'."
-  :type 'boolean)
-
-(defvar jellyfin--token nil "Current session access token.")
-(defvar jellyfin--user-id nil "Current session user ID.")
-
-(defconst jellyfin--client-name "Emacs")
-(defconst jellyfin--client-version "1.0.0")
-(defconst jellyfin--device-name (system-name))
-(defconst jellyfin--device-id (md5 (system-name)))
+  :type 'boolean
+  :group 'jellyfin)
 
 ;;; --- mpv playback state (one session at a time) ---
 
@@ -147,184 +140,6 @@ Requires the `elcava' package and `parec'."
 (defvar jellyfin--mpv-socket nil "Path to mpv IPC socket file.")
 (defvar jellyfin--mpv-play-session-id nil "Random play session ID for Jellyfin reporting.")
 (defvar jellyfin--mpv-start-secs nil "Initial seek position for first playlist item only.")
-
-;;; --- Authentication ---
-
-(defun jellyfin--auth-header ()
-  "Build the MediaBrowser Authorization header value."
-  (format "MediaBrowser Client=\"%s\", Device=\"%s\", DeviceId=\"%s\", Version=\"%s\"%s"
-          jellyfin--client-name
-          jellyfin--device-name
-          jellyfin--device-id
-          jellyfin--client-version
-          (if jellyfin--token
-              (format ", Token=\"%s\"" jellyfin--token)
-            "")))
-
-(defun jellyfin--ensure-auth ()
-  "Authenticate if we don't have a token yet."
-  (unless jellyfin--token
-    (jellyfin--authenticate)))
-
-(defun jellyfin--authenticate ()
-  "Authenticate with Jellyfin using credentials from auth-source."
-  (let* ((host (url-host (url-generic-parse-url jellyfin-server-url)))
-         (found (car (auth-source-search :host host :max 1)))
-         (user (plist-get found :user))
-         (secret (plist-get found :secret))
-         (password (if (functionp secret) (funcall secret) secret))
-         (_ (unless (and user password)
-              (user-error "No Jellyfin credentials for %s found via auth-source"
-                          host)))
-         (url-show-status nil)
-         (url-request-noninteractive t)
-         (url-request-method "POST")
-         (url-request-extra-headers
-          `(("Content-Type" . "application/json")
-            ("Authorization" . ,(jellyfin--auth-header))))
-         (url-request-data
-          (json-encode `((Username . ,user) (Pw . ,password))))
-         (buf (url-retrieve-synchronously
-               (concat jellyfin-server-url "/Users/AuthenticateByName"))))
-    (with-current-buffer buf
-      (goto-char url-http-end-of-headers)
-      (unless (eql url-http-response-status 200)
-        (let ((status url-http-response-status)
-              (body (string-trim (buffer-substring (point) (point-max)))))
-          (kill-buffer)
-          (user-error "Jellyfin authentication failed (HTTP %s): %s"
-                      status body)))
-      (let ((resp (json-read)))
-        (setq jellyfin--token (alist-get 'AccessToken resp))
-        (setq jellyfin--user-id (alist-get 'Id (alist-get 'User resp))))
-      (kill-buffer))))
-
-;;; --- API helpers ---
-
-(defun jellyfin--api-get (path &optional params)
-  "GET PATH from the Jellyfin server with optional query PARAMS alist.
-Returns parsed JSON."
-  (jellyfin--ensure-auth)
-  (let* ((query (if params
-                    (concat "?" (mapconcat
-                                (lambda (p)
-                                  (format "%s=%s"
-                                          (url-hexify-string (car p))
-                                          (url-hexify-string (cdr p))))
-                                params "&"))
-                  ""))
-         (url-show-status nil)
-         (url-request-noninteractive t)
-         (url-request-method "GET")
-         (url-request-extra-headers
-          `(("Authorization" . ,(jellyfin--auth-header))))
-         (buf (url-retrieve-synchronously
-               (concat jellyfin-server-url path query))))
-    (with-current-buffer buf
-      (goto-char url-http-end-of-headers)
-      (prog1 (json-read)
-        (kill-buffer)))))
-
-(defun jellyfin--api-post-async (path body)
-  "Fire-and-forget async POST to PATH with BODY alist.
-Callback kills the response buffer and clears the token on 401."
-  (jellyfin--ensure-auth)
-  (let ((url-show-status nil)
-        (url-request-noninteractive t)
-        (url-request-method "POST")
-        (url-request-extra-headers
-         `(("Content-Type" . "application/json")
-           ("Authorization" . ,(jellyfin--auth-header))))
-        (url-request-data (json-encode body)))
-    (url-retrieve (concat jellyfin-server-url path)
-                  (lambda (_status &rest _)
-                    (when (and (boundp 'url-http-response-status)
-                               (eql url-http-response-status 401))
-                      (setq jellyfin--token nil))
-                    (when-let* ((buf (current-buffer)))
-                      (when (buffer-live-p buf)
-                        (kill-buffer buf)))))))
-
-(defun jellyfin--stream-url (id media-type)
-  "Construct a direct stream URL for item ID of MEDIA-TYPE (Audio or Videos)."
-  (format "%s/%s/%s/stream?Static=true&api_key=%s"
-          jellyfin-server-url media-type id jellyfin--token))
-
-(defun jellyfin--retry-if-empty (fn &optional max-retries)
-  "Call FN.  If the result is an empty sequence, re-authenticate and retry.
-Retries up to MAX-RETRIES times (default 2)."
-  (let ((result (funcall fn))
-        (retries (or max-retries 2))
-        (attempts 0))
-    (while (and (zerop (length result))
-                (< attempts retries))
-      (setq attempts (1+ attempts)
-            jellyfin--token nil)
-      (jellyfin--ensure-auth)
-      (setq result (funcall fn)))
-    result))
-
-;;; --- Fetching items ---
-
-(defun jellyfin--get-items (media-type &optional parent-id extra-params)
-  "Fetch items of MEDIA-TYPE under optional PARENT-ID.
-EXTRA-PARAMS is an alist of additional query params.
-Returns the Items array."
-  (let ((params `(("IncludeItemTypes" . ,media-type)
-                  ("Recursive" . "true")
-                  ("SortBy" . "SortName")
-                  ("SortOrder" . "Ascending")
-                  ("Fields" . "MediaSources,Overview"))))
-    (when parent-id
-      (push `("ParentId" . ,parent-id) params))
-    (when extra-params
-      (setq params (append extra-params params)))
-    (let ((resp (jellyfin--api-get
-                 (format "/Users/%s/Items" jellyfin--user-id)
-                 params)))
-      (alist-get 'Items resp))))
-
-(defun jellyfin--get-artists ()
-  "Fetch all album artists."
-  (let ((resp (jellyfin--api-get
-               (format "/Artists/AlbumArtists")
-               `(("UserId" . ,jellyfin--user-id)
-                 ("SortBy" . "SortName")
-                 ("SortOrder" . "Ascending")))))
-    (alist-get 'Items resp)))
-
-(defun jellyfin--get-albums-by-artist (artist-id)
-  "Fetch albums for ARTIST-ID."
-  (jellyfin--get-items "MusicAlbum" nil
-                       `(("AlbumArtistIds" . ,artist-id))))
-
-(defun jellyfin--get-playlists ()
-  "Fetch all playlists."
-  (jellyfin--get-items "Playlist"))
-
-(defun jellyfin--get-playlist-items (playlist-id)
-  "Fetch items in PLAYLIST-ID, preserving playlist order."
-  (let ((resp (jellyfin--api-get
-               (format "/Playlists/%s/Items" playlist-id)
-               `(("UserId" . ,jellyfin--user-id)
-                 ("Fields" . "MediaSources")))))
-    (alist-get 'Items resp)))
-
-(defun jellyfin--get-album-tracks (album-id)
-  "Fetch tracks in ALBUM-ID, sorted by index."
-  (let ((resp (jellyfin--api-get
-               (format "/Users/%s/Items" jellyfin--user-id)
-               `(("ParentId" . ,album-id)
-                 ("IncludeItemTypes" . "Audio")
-                 ("SortBy" . "IndexNumber")
-                 ("SortOrder" . "Ascending")
-                 ("Fields" . "MediaSources")))))
-    (alist-get 'Items resp)))
-
-(defun jellyfin--get-item-by-id (id)
-  "Fetch a single item by ID from Jellyfin."
-  (jellyfin--ensure-auth)
-  (jellyfin--api-get (format "/Users/%s/Items/%s" jellyfin--user-id id)))
 
 ;;; --- EMMS integration (info method + source) ---
 
@@ -346,7 +161,7 @@ Returns the Items array."
 Checks the in-memory item cache first, falls back to API."
   (when-let* ((id (jellyfin--extract-item-id url)))
     (or (gethash id jellyfin--item-cache)
-        (let ((item (jellyfin--get-item-by-id id)))
+        (let ((item (jellyfin-get-item id)))
           (when item
             (puthash id item jellyfin--item-cache))
           item))))
@@ -392,7 +207,7 @@ regardless of whether `emms-info-asynchronously' is non-nil."
   (jellyfin--item-cache-populate items)
   (seq-doseq (item items)
     (let* ((id (alist-get 'Id item))
-           (url (jellyfin--stream-url id "Audio"))
+           (url (jellyfin-stream-url id "Audio"))
            (artists (alist-get 'AlbumArtists item))
            (artist-id (and (> (length artists) 0)
                            (alist-get 'Id (aref artists 0)))))
@@ -407,25 +222,6 @@ regardless of whether `emms-info-asynchronously' is non-nil."
             (emms-track-set emms-track 'jellyfin-cover-id
                             (or (alist-get 'AlbumId item) id))
             (emms-track-set emms-track 'jellyfin-artist-id artist-id)))))))
-
-;;; --- Fetching shows/seasons/episodes ---
-
-(defun jellyfin--get-seasons (series-id)
-  "Fetch seasons for SERIES-ID."
-  (let ((resp (jellyfin--api-get
-               (format "/Shows/%s/Seasons" series-id)
-               `(("userId" . ,jellyfin--user-id)
-                 ("Fields" . "Overview")))))
-    (alist-get 'Items resp)))
-
-(defun jellyfin--get-episodes (series-id season-id)
-  "Fetch episodes for SERIES-ID in SEASON-ID."
-  (let ((resp (jellyfin--api-get
-               (format "/Shows/%s/Episodes" series-id)
-               `(("userId" . ,jellyfin--user-id)
-                 ("seasonId" . ,season-id)
-                 ("Fields" . "MediaSources,Overview")))))
-    (alist-get 'Items resp)))
 
 ;;; --- Image fetching ---
 
@@ -463,9 +259,7 @@ on disk (`jellyfin-image-cache/' in `user-emacs-directory')."
           (condition-case nil
               (let* ((url-show-status nil)
                      (url-request-noninteractive t)
-                     (_auth (jellyfin--ensure-auth))
-                     (img-url (format "%s/Items/%s/Images/Primary?maxWidth=300&api_key=%s"
-                                      jellyfin-server-url item-id jellyfin--token))
+                     (img-url (jellyfin-image-url item-id "Primary" 300))
                      (tmp-file (make-temp-file "jellyfin-poster-")))
                 (let ((inhibit-message t))
                   (url-copy-file img-url tmp-file t))
@@ -509,10 +303,7 @@ Results are cached in memory and on disk."
             (condition-case nil
                 (let* ((url-show-status nil)
                        (url-request-noninteractive t)
-                       (_auth (jellyfin--ensure-auth))
-                       (img-url (format "%s/Items/%s/Images/%s?maxWidth=%d&api_key=%s"
-                                        jellyfin-server-url item-id image-type
-                                        width jellyfin--token))
+                       (img-url (jellyfin-image-url item-id image-type width))
                        (tmp-file (make-temp-file "jellyfin-img-")))
                   (let ((inhibit-message t))
                     (url-copy-file img-url tmp-file t))
@@ -574,39 +365,23 @@ Results are cached in memory and on disk."
         image)))
 
 ;;; --- Playback reporting ---
+;;
+;; Thin wrappers that report the current mpv session to Jellyfin.
 
 (defun jellyfin--report-playing (item-id &optional position-secs)
   "Report playback started for ITEM-ID at POSITION-SECS."
-  (jellyfin--api-post-async
-   "/Sessions/Playing"
-   `((ItemId . ,item-id)
-     (MediaSourceId . ,item-id)
-     (PlaySessionId . ,jellyfin--mpv-play-session-id)
-     (PlayMethod . "DirectPlay")
-     (CanSeek . t)
-     (IsPaused . :json-false)
-     (PositionTicks . ,(* (or position-secs 0) 10000000)))))
+  (jellyfin-report-playing item-id jellyfin--mpv-play-session-id
+                           position-secs))
 
 (defun jellyfin--report-progress (item-id position-secs)
   "Report playback progress for ITEM-ID at POSITION-SECS."
-  (jellyfin--api-post-async
-   "/Sessions/Playing/Progress"
-   `((ItemId . ,item-id)
-     (MediaSourceId . ,item-id)
-     (PlaySessionId . ,jellyfin--mpv-play-session-id)
-     (PlayMethod . "DirectPlay")
-     (CanSeek . t)
-     (IsPaused . ,(if jellyfin--mpv-paused t :json-false))
-     (PositionTicks . ,(* (truncate position-secs) 10000000)))))
+  (jellyfin-report-progress item-id jellyfin--mpv-play-session-id
+                            position-secs jellyfin--mpv-paused))
 
 (defun jellyfin--report-stopped (item-id position-secs)
   "Report playback stopped for ITEM-ID at POSITION-SECS."
-  (jellyfin--api-post-async
-   "/Sessions/Playing/Stopped"
-   `((ItemId . ,item-id)
-     (MediaSourceId . ,item-id)
-     (PlaySessionId . ,jellyfin--mpv-play-session-id)
-     (PositionTicks . ,(* (truncate (or position-secs 0)) 10000000)))))
+  (jellyfin-report-stopped item-id jellyfin--mpv-play-session-id
+                           position-secs))
 
 ;;; --- mpv IPC & lifecycle ---
 
@@ -762,7 +537,7 @@ Cleans up any existing session first."
     (setq jellyfin--mpv-socket sock
           jellyfin--mpv-item-ids item-ids
           jellyfin--mpv-ipc-buf ""
-          jellyfin--mpv-play-session-id (md5 (format "%s%s" (random) (current-time))))
+          jellyfin--mpv-play-session-id (jellyfin-generate-play-session-id))
     (if (= (length urls) 1)
         (setq args (append args (list (car urls))))
       ;; Write m3u playlist for multiple URLs
@@ -1058,7 +833,7 @@ BUFFER-NAME defaults to \"*Jellyfin*\"."
   "Fetch and render seasons for SERIES-ITEM in *Jellyfin Seasons*."
   (let* ((parent (current-buffer))
          (series-id (alist-get 'Id series-item))
-         (seasons (jellyfin--get-seasons series-id)))
+         (seasons (jellyfin-get-seasons series-id)))
     (jellyfin--show-dired-render-grid
      (append seasons nil)
      (lambda (item)
@@ -1078,7 +853,7 @@ Clicking an episode plays it directly in mpv."
          (season-id (alist-get 'Id season-item))
          (season-name (alist-get 'Name season-item))
          (season-num (alist-get 'IndexNumber season-item))
-         (episodes (jellyfin--get-episodes series-id season-id)))
+         (episodes (jellyfin-get-episodes series-id season-id)))
     (jellyfin--show-preview-render-items
      (append episodes nil)
      (lambda (item)
@@ -1091,7 +866,7 @@ Clicking an episode plays it directly in mpv."
              (seq-doseq (ep eps)
                (when (or found (equal (alist-get 'Id ep) chosen-id))
                  (setq found t)
-                 (push (jellyfin--stream-url (alist-get 'Id ep) "Videos") urls)
+                 (push (jellyfin-stream-url (alist-get 'Id ep) "Videos") urls)
                  (push (alist-get 'Id ep) ep-ids)))
              (setq urls (nreverse urls)
                    ep-ids (nreverse ep-ids))
@@ -1160,9 +935,9 @@ Requires `jellyfin-emms-cover-art' and GUI Emacs."
   "Pick a movie from Jellyfin and play it in mpv.
 Shows a preview buffer with posters and descriptions as you type."
   (interactive)
-  (jellyfin--ensure-auth)
-  (let* ((items (jellyfin--retry-if-empty
-                 (lambda () (jellyfin--get-items "Movie"))))
+  (jellyfin-ensure-auth)
+  (let* ((items (jellyfin-retry-if-empty
+                 (lambda () (jellyfin-get-items "Movie"))))
          (names (mapcar (lambda (item)
                           (cons (alist-get 'Name item) item))
                         items)))
@@ -1181,7 +956,7 @@ Shows a preview buffer with posters and descriptions as you type."
                                      (mapcar #'car names) nil t))))
       (when-let* ((item (cdr (assoc choice names)))
                   (id (alist-get 'Id item))
-                  (url (jellyfin--stream-url id "Videos")))
+                  (url (jellyfin-stream-url id "Videos")))
         (jellyfin--mpv-play (list url) (vector id))
         (message "Playing movie: %s" choice)))))
 
@@ -1227,7 +1002,7 @@ Uses cached metadata when available; run
      (lambda (item)
        (lambda (_btn)
          (let* ((id (alist-get 'Id item))
-                (url (jellyfin--stream-url id "Videos")))
+                (url (jellyfin-stream-url id "Videos")))
            (jellyfin--mpv-play (list url) (vector id))
            (message "Playing movie: %s" (alist-get 'Name item)))))
      (lambda (item)
@@ -1239,7 +1014,7 @@ Uses cached metadata when available; run
   "Fetch all movies from the Jellyfin server and update the local cache.
 Also clears cached poster images for movies so they are re-fetched."
   (interactive)
-  (jellyfin--ensure-auth)
+  (jellyfin-ensure-auth)
   (message "Fetching movies...")
   ;; Clear disk-cached images for old items
   (when jellyfin--movies-gallery-cache
@@ -1250,8 +1025,8 @@ Also clears cached poster images for movies so they are re-fetched."
             (delete-file file))
           (remhash (alist-get 'Id item) jellyfin--preview-image-cache)))))
   (setq jellyfin--movies-gallery-cache
-        (append (jellyfin--retry-if-empty
-                 (lambda () (jellyfin--get-items "Movie")))
+        (append (jellyfin-retry-if-empty
+                 (lambda () (jellyfin-get-items "Movie")))
                 nil))
   (jellyfin--movies-gallery-cache-save)
   (jellyfin--item-cache-populate jellyfin--movies-gallery-cache)
@@ -1264,9 +1039,9 @@ Also clears cached poster images for movies so they are re-fetched."
 When `jellyfin-completing-read-preview' is non-nil, shows a preview
 buffer with images and descriptions that narrows as you type."
   (interactive)
-  (jellyfin--ensure-auth)
+  (jellyfin-ensure-auth)
   (let* (;; Pick artist
-         (artists (jellyfin--retry-if-empty #'jellyfin--get-artists))
+         (artists (jellyfin-retry-if-empty #'jellyfin-get-artists))
          (artist-names (mapcar (lambda (a) (cons (alist-get 'Name a) a))
                                artists))
          (artist-choice
@@ -1286,7 +1061,7 @@ buffer with images and descriptions that narrows as you type."
          (artist (cdr (assoc artist-choice artist-names)))
          (artist-id (alist-get 'Id artist))
          ;; Pick album
-         (albums (jellyfin--get-albums-by-artist artist-id))
+         (albums (jellyfin-get-albums-by-artist artist-id))
          (album-names (mapcar (lambda (a) (cons (alist-get 'Name a) a))
                               albums))
          (album-choice
@@ -1306,7 +1081,7 @@ buffer with images and descriptions that narrows as you type."
          (album (cdr (assoc album-choice album-names)))
          (album-id (alist-get 'Id album))
          ;; Get tracks
-         (tracks (jellyfin--get-album-tracks album-id)))
+         (tracks (jellyfin-get-album-tracks album-id)))
     (jellyfin--add-jellyfin-tracks tracks)
     (add-hook 'emms-player-started-hook #'jellyfin--playlist-track-started)
     (add-hook 'emms-player-started-hook #'jellyfin--elcava-track-started)
@@ -1320,8 +1095,8 @@ buffer with images and descriptions that narrows as you type."
 When `jellyfin-completing-read-preview' is non-nil, shows a preview
 buffer with images and descriptions that narrows as you type."
   (interactive)
-  (jellyfin--ensure-auth)
-  (let* ((playlists (jellyfin--retry-if-empty #'jellyfin--get-playlists))
+  (jellyfin-ensure-auth)
+  (let* ((playlists (jellyfin-retry-if-empty #'jellyfin-get-playlists))
          (playlist-names (mapcar (lambda (p) (cons (alist-get 'Name p) p))
                                  playlists))
          (choice
@@ -1340,7 +1115,7 @@ buffer with images and descriptions that narrows as you type."
                              (mapcar #'car playlist-names) nil t)))
          (playlist (cdr (assoc choice playlist-names)))
          (playlist-id (alist-get 'Id playlist))
-         (tracks (jellyfin--get-playlist-items playlist-id)))
+         (tracks (jellyfin-get-playlist-items playlist-id)))
     (jellyfin--add-jellyfin-tracks tracks)
     (add-hook 'emms-player-started-hook #'jellyfin--playlist-track-started)
     (add-hook 'emms-player-started-hook #'jellyfin--elcava-track-started)
@@ -1354,9 +1129,9 @@ When `jellyfin-completing-read-preview' is non-nil, shows a preview buffer with
 images and descriptions that narrows as you type, like
 `jellyfin-browse-movies'.  All three steps use completing-read."
   (interactive)
-  (jellyfin--ensure-auth)
-  (let* ((series (jellyfin--retry-if-empty
-                   (lambda () (jellyfin--get-items "Series"))))
+  (jellyfin-ensure-auth)
+  (let* ((series (jellyfin-retry-if-empty
+                   (lambda () (jellyfin-get-items "Series"))))
          (series-alist (mapcar (lambda (s) (cons (alist-get 'Name s) s))
                                series))
          ;; Step 1: Pick series
@@ -1377,7 +1152,7 @@ images and descriptions that narrows as you type, like
          (series-item (cdr (assoc series-choice series-alist)))
          (series-id (alist-get 'Id series-item))
          ;; Step 2: Pick season
-         (seasons (jellyfin--get-seasons series-id))
+         (seasons (jellyfin-get-seasons series-id))
          (season-alist (mapcar (lambda (s) (cons (alist-get 'Name s) s))
                                seasons))
          (season-choice
@@ -1398,7 +1173,7 @@ images and descriptions that narrows as you type, like
          (season-id (alist-get 'Id season-item))
          (season-num (alist-get 'IndexNumber season-item))
          ;; Step 3: Pick episode
-         (episodes (jellyfin--get-episodes series-id season-id))
+         (episodes (jellyfin-get-episodes series-id season-id))
          (episode-alist
           (mapcar (lambda (ep)
                     (cons (format "S%02dE%02d — %s"
@@ -1434,7 +1209,7 @@ images and descriptions that narrows as you type, like
       (seq-doseq (ep episodes)
         (when (or found (equal (alist-get 'Id ep) chosen-id))
           (setq found t)
-          (push (jellyfin--stream-url (alist-get 'Id ep) "Videos") urls)
+          (push (jellyfin-stream-url (alist-get 'Id ep) "Videos") urls)
           (push (alist-get 'Id ep) ep-ids)))
       (setq urls (nreverse urls)
             ep-ids (nreverse ep-ids))
@@ -1496,7 +1271,7 @@ Uses cached metadata when available; run
   "Fetch all shows from the Jellyfin server and update the local cache.
 Also clears cached poster images for shows so they are re-fetched."
   (interactive)
-  (jellyfin--ensure-auth)
+  (jellyfin-ensure-auth)
   (message "Fetching shows...")
   ;; Clear disk-cached images for old items
   (when jellyfin--shows-gallery-cache
@@ -1507,8 +1282,8 @@ Also clears cached poster images for shows so they are re-fetched."
             (delete-file file))
           (remhash (alist-get 'Id item) jellyfin--preview-image-cache)))))
   (setq jellyfin--shows-gallery-cache
-        (append (jellyfin--retry-if-empty
-                 (lambda () (jellyfin--get-items "Series")))
+        (append (jellyfin-retry-if-empty
+                 (lambda () (jellyfin-get-items "Series")))
                 nil))
   (jellyfin--shows-gallery-cache-save)
   (jellyfin--item-cache-populate jellyfin--shows-gallery-cache)
@@ -1519,26 +1294,12 @@ Also clears cached poster images for shows so they are re-fetched."
 (defun jellyfin-browse-continue-watching ()
   "Resume a movie or show from Jellyfin's Continue Watching list."
   (interactive)
-  (jellyfin--ensure-auth)
+  (jellyfin-ensure-auth)
   (let* ((resume-items
-          (jellyfin--retry-if-empty
+          (jellyfin-retry-if-empty
            (lambda ()
-             (alist-get 'Items
-                        (jellyfin--api-get
-                         "/UserItems/Resume"
-                         `(("userId" . ,jellyfin--user-id)
-                           ("enableUserData" . "true")
-                           ("mediaTypes" . "Video")
-                           ("limit" . "20")
-                           ("fields" . "MediaSources,Overview")))))))
-         (nextup-items
-          (alist-get 'Items
-                     (jellyfin--api-get
-                      "/Shows/NextUp"
-                      `(("userId" . ,jellyfin--user-id)
-                        ("enableUserData" . "true")
-                        ("limit" . "20")
-                        ("fields" . "MediaSources,Overview")))))
+             (jellyfin-get-resume-items))))
+         (nextup-items (jellyfin-get-next-up))
          (make-label
           (lambda (item tag)
             (let* ((type (alist-get 'Type item))
@@ -1598,7 +1359,7 @@ Also clears cached poster images for shows so they are re-fetched."
          (start-secs (/ (or ticks 0) 10000000)))
     (if (equal type "Movie")
         ;; Movie: resume at saved position
-        (let ((url (jellyfin--stream-url id "Videos")))
+        (let ((url (jellyfin-stream-url id "Videos")))
           (jellyfin--mpv-play (list url) (vector id) start-secs)
           (message "Resuming movie: %s at %dm%ds"
                    (alist-get 'Name item)
@@ -1606,7 +1367,7 @@ Also clears cached poster images for shows so they are re-fetched."
       ;; Episode: fetch remaining episodes in season, resume first one
       (let* ((series-id (alist-get 'SeriesId item))
              (season-id (alist-get 'SeasonId item))
-             (episodes (jellyfin--get-episodes series-id season-id))
+             (episodes (jellyfin-get-episodes series-id season-id))
              (found nil)
              (urls nil)
              (ep-ids nil))
@@ -1614,7 +1375,7 @@ Also clears cached poster images for shows so they are re-fetched."
         (seq-doseq (ep episodes)
           (when (or found (equal (alist-get 'Id ep) id))
             (setq found t)
-            (push (jellyfin--stream-url (alist-get 'Id ep) "Videos") urls)
+            (push (jellyfin-stream-url (alist-get 'Id ep) "Videos") urls)
             (push (alist-get 'Id ep) ep-ids)))
         (setq urls (nreverse urls))
         (setq ep-ids (nreverse ep-ids))
@@ -1788,34 +1549,15 @@ Uses cached metadata when available; run
 (defun jellyfin-browse-songs-refetch-metadata ()
   "Fetch all songs from the Jellyfin server and update the local cache."
   (interactive)
-  (jellyfin--ensure-auth)
+  (jellyfin-ensure-auth)
   (message "Fetching songs...")
   (setq jellyfin--songs-cache
-        (jellyfin--retry-if-empty
-         (lambda ()
-           (alist-get 'Items
-             (jellyfin--api-get
-              (format "/Users/%s/Items" jellyfin--user-id)
-              '(("IncludeItemTypes" . "Audio")
-                ("Recursive" . "true")
-                ("SortBy" . "AlbumArtist,Album,IndexNumber")
-                ("SortOrder" . "Ascending")
-                ("Fields" . "MediaSources")))))))
+        (jellyfin-retry-if-empty #'jellyfin-get-songs))
   (jellyfin--songs-cache-save)
   (jellyfin--item-cache-populate jellyfin--songs-cache)
   (message "Cached %d songs." (length jellyfin--songs-cache)))
 
 ;;; --- Song Info popup ---
-
-(defun jellyfin--format-ticks (ticks)
-  "Format Jellyfin RunTimeTicks (100ns units) as \"M:SS\" or \"H:MM:SS\"."
-  (let* ((total-secs (/ (or ticks 0) 10000000))
-         (hours (/ total-secs 3600))
-         (mins (/ (mod total-secs 3600) 60))
-         (secs (mod total-secs 60)))
-    (if (> hours 0)
-        (format "%d:%02d:%02d" hours mins secs)
-      (format "%d:%02d" mins secs))))
 
 (defvar jellyfin--song-info-mode-map
   (let ((map (make-keymap)))
@@ -1850,7 +1592,7 @@ Only `q', RET, mouse-1 and mouse scrolling are active; all other keys are suppre
   "Queue the album at point to EMMS and dismiss the song info buffer."
   (interactive)
   (if-let* ((album-id (get-text-property (point) 'jellyfin-album-id)))
-      (let ((tracks (jellyfin--get-album-tracks album-id)))
+      (let ((tracks (jellyfin-get-album-tracks album-id)))
         (if (and tracks (> (length tracks) 0))
             (progn
               (jellyfin--add-jellyfin-tracks tracks)
@@ -1880,7 +1622,7 @@ Only `q', RET, mouse-1 and mouse scrolling are active; all other keys are suppre
          (ticks (alist-get 'RunTimeTicks item))
          (artist-data (when artist-id
                         (condition-case nil
-                            (jellyfin--get-item-by-id artist-id)
+                            (jellyfin-get-item artist-id)
                           (error nil))))
          (genres (when artist-data
                    (alist-get 'Genres artist-data)))
@@ -1920,13 +1662,13 @@ Only `q', RET, mouse-1 and mouse scrolling are active; all other keys are suppre
           (when index
             (push (format "Track %d" index) parts))
           (when ticks
-            (push (jellyfin--format-ticks ticks) parts))
+            (push (jellyfin-format-ticks ticks) parts))
           (when parts
             (insert (mapconcat #'identity (nreverse parts) "  |  ") "\n")))
         ;; Discography (grid layout)
         (when artist-id
           (let ((disco-albums (condition-case nil
-                                  (jellyfin--get-albums-by-artist artist-id)
+                                  (jellyfin-get-albums-by-artist artist-id)
                                 (error nil))))
             (when (and disco-albums (> (length disco-albums) 0))
               (insert "\n"

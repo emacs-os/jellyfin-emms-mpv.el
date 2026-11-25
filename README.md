@@ -9,6 +9,7 @@ Browse and play music/video from a Jellyfin server via EMMS + mpv. Tracks playba
 ## Requirements
 
 - A Jellyfin server
+- [jellyfin.el](https://github.com/emacs-os/jellyfin.el), the API client this package is built on
 - EMMS (music)
 - mpv (video)
 
@@ -35,6 +36,8 @@ Add credentials to `~/.authinfo` or `~/.authinfo.gpg`:
 machine your-server.example.com login USERNAME password PASSWORD
 ```
 
+Declare `jellyfin` before `jellyfin-emms-mpv` as shown below. It isn't on MELPA, so your package manager needs its recipe to install it as a dependency. Upgrading from 0.14 or earlier? Add the `jellyfin` block; nothing else in your config changes.
+
 If your server uses a custom port (e.g. `http://your-server.example.com:8096`), include `port` in the `machine` entry:
 
 ```
@@ -54,6 +57,11 @@ user: USERNAME
 
 **Elpaca**
 ```elisp
+(use-package jellyfin
+  :defer t
+  :ensure (:host github
+           :repo "emacs-os/jellyfin.el"))
+
 (use-package jellyfin-emms-mpv
   :defer t
   :ensure (:host github
@@ -73,6 +81,11 @@ user: USERNAME
 
 **straight.el**
 ```elisp
+(use-package jellyfin
+  :defer t
+  :straight (:host github
+             :repo "emacs-os/jellyfin.el"))
+
 (use-package jellyfin-emms-mpv
   :defer t
   :straight (:host github
@@ -150,7 +163,7 @@ Example config used during development. Press `!` on a song in the EMMS playlist
 
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
-| `jellyfin-server-url` | `string` | `nil` | Jellyfin server URL (e.g. `"https://host.example.com"`) |
+| `jellyfin-server-url` | `string` | `nil` | Jellyfin server URL (e.g. `"https://host.example.com"`). Defined by jellyfin.el |
 | `jellyfin-completing-read-preview` | `boolean` | `nil` | `t` to show poster previews during minibuffer completion (GUI Emacs only). `jellyfin-preview` is a deprecated alias |
 | `jellyfin-preferred-language` | `string` or `nil` | `nil` | ISO 639-2 three-letter audio language code: `"eng"`, `"fre"`, `"jpn"`, etc. Passed as `--alang` to mpv |
 | `jellyfin-subtitles` | `boolean` | `nil` | `t` to show subtitles matching `jellyfin-preferred-language` (`--slang`). Requires `jellyfin-preferred-language` to be set |
@@ -162,6 +175,9 @@ Example config used during development. Press `!` on a song in the EMMS playlist
 **Video** bypasses EMMS and spawns mpv directly. Playback position is tracked over mpv's IPC socket and reported to Jellyfin every 30s. Shows generate an m3u playlist from the chosen episode through end of season. Resume seeks to the saved position.
 
 **Audio** uses EMMS normally. Track metadata (title, artist, album, track number) is set via `emms-info-functions` so it works with the playlist display, modeline, etc.
+
+**Server API** calls (authentication, library queries, stream URLs, playback reporting) go through [jellyfin.el](https://github.com/emacs-os/jellyfin.el).
+
 ## License
 
-MIT
+GPL-3.0-or-later. See [LICENSE](LICENSE).
