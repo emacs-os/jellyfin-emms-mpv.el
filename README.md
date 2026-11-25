@@ -2,6 +2,8 @@
 
 Browse and play music/video from a Jellyfin server via EMMS + mpv. Tracks playback position and reports to Jellyfin so "Continue Watching" stays in sync.
 
+![Movie poster gallery from jellyfin-browse-movies-gallery](screenshots/movies-gallery.png)
+
 ## Requirements
 
 - A Jellyfin server
